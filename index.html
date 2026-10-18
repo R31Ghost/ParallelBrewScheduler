@@ -1,0 +1,1698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parallel Brew Scheduler</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+JP:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: sticky header → full-width timeline workbench → panel deck (recipe column + tabbed tools on wide screens, tabs on phones).
+   Prototype v0.7-p1 — built from [[Parallel Brew Scheduler - Requirements]] v0.7. */
+:root {
+  --bg: #eef1f5; --surface: #ffffff; --surface-2: #e4e9ef; --line: #cfd6df; --line-strong: #8e9aaa;
+  --fg: #17202b; --muted: #556274; --faint: #8592a3;
+  --accent: #c7860a; --accent-ink: #1d1404; --accent-soft: #f7e6bd;
+  --pour: #2f6a8c; --pour-ink: #ffffff; --op: #8b4e27; --op-ink: #ffffff; --wait: #7d8a9b;
+  --err: #c0362c; --err-soft: #f8dcd8; --warn: #a86c0c; --warn-soft: #f6e8c9; --ok: #2b8150; --ok-soft: #d6eedf;
+  --t1: #e6eaef; --t2: #d3dae2; --t3: #a5b0bd; --t4: #5f6c7c;
+  --valve-closed: #2f6a8c; --valve-open: #9fc3d8;
+  --font-sans: "IBM Plex Sans JP", "Hiragino Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 6px; --lane-h: 58px; --label-w: 64px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e131a; --surface: #151c25; --surface-2: #1c2531; --line: #2a3542; --line-strong: #4d5b6d;
+  --fg: #e5eaf0; --muted: #9ba7b6; --faint: #6b7889;
+  --accent: #f0b03a; --accent-ink: #1d1404; --accent-soft: #3b2c0f;
+  --pour: #4b90bb; --pour-ink: #08131b; --op: #c47b47; --op-ink: #1a0d04; --wait: #6c7a8c;
+  --err: #ef5d53; --err-soft: #3d1a17; --warn: #e3a541; --warn-soft: #3a2a0f; --ok: #4fb57d; --ok-soft: #12301f;
+  --t1: #19212b; --t2: #232d39; --t3: #3e4a59; --t4: #8d99a8;
+  --valve-closed: #4b90bb; --valve-open: #24435a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c25; --surface-2: #1c2531; --line: #2a3542; --line-strong: #4d5b6d;
+  --fg: #e5eaf0; --muted: #9ba7b6; --faint: #6b7889;
+  --accent: #f0b03a; --accent-ink: #1d1404; --accent-soft: #3b2c0f;
+  --pour: #4b90bb; --pour-ink: #08131b; --op: #c47b47; --op-ink: #1a0d04; --wait: #6c7a8c;
+  --err: #ef5d53; --err-soft: #3d1a17; --warn: #e3a541; --warn-soft: #3a2a0f; --ok: #4fb57d; --ok-soft: #12301f;
+  --t1: #19212b; --t2: #232d39; --t3: #3e4a59; --t4: #8d99a8;
+  --valve-closed: #4b90bb; --valve-open: #24435a; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--fg); }
+body { margin: 0; font: 400 14px/1.45 var(--font-sans); -webkit-text-size-adjust: 100%; overflow-x: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.lbl { font: 500 10.5px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+h2 { font-size: 15px; font-weight: 600; margin: 0; text-wrap: balance; }
+h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* controls */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 11px; border-radius: var(--r);
+  border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; white-space: nowrap; }
+.btn:hover { border-color: var(--line-strong); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.danger { color: var(--err); }
+.btn.danger.armed { background: var(--err); border-color: var(--err); color: #fff; }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.sm { min-height: 26px; padding: 0 8px; font-size: 12px; }
+.btn.icon { width: 32px; padding: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: transparent; min-height: 30px; padding: 0 10px; cursor: pointer; font: 500 12px var(--font-mono); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button[disabled] { opacity: .4; cursor: not-allowed; }
+input[type="text"], input[type="number"], select, textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; min-height: 30px; min-width: 0; }
+input[type="number"] { font-family: var(--font-mono); }
+input.clock { font-family: var(--font-mono); width: 70px; }
+input.w-num { width: 70px; }
+input:disabled, select:disabled { opacity: .5; }
+textarea { width: 100%; resize: vertical; }
+input[type="range"] { accent-color: var(--accent); width: 100%; min-width: 0; }
+input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.spacer { flex: 1; }
+.note { font-size: 12px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font: 600 11px/1.6 var(--font-mono); letter-spacing: .04em; white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.err { background: var(--err-soft); color: var(--err); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.neutral { background: var(--surface-2); color: var(--muted); }
+.chip { display: inline-block; padding: 1px 6px; border-radius: 4px; font: 600 10px/1.5 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
+.chip.pour { background: var(--pour); color: var(--pour-ink); }
+.chip.op { background: var(--op); color: var(--op-ink); }
+.chip.wait { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.chip.custom { border: 1px dashed var(--line-strong); color: var(--fg); }
+
+/* header */
+.app-head { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30; background: var(--surface); border-bottom: 1px solid var(--line); }
+.app-head .inner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-block: 8px; }
+.brand { display: grid; line-height: 1.15; min-width: 0; }
+.brand b { font-size: 15px; letter-spacing: -.01em; }
+.brand span { font: 500 10px var(--font-mono); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.recipe-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.notices { display: grid; gap: 6px; }
+.notice { border: 1px solid var(--warn); background: var(--warn-soft); color: var(--fg); border-radius: var(--r); padding: 8px 10px; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
+.notice.err { border-color: var(--err); background: var(--err-soft); }
+
+/* timeline */
+.workbench { padding-block: 12px 0; display: grid; gap: 8px; }
+.tl-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tl-frame { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+.tl-labels { border-right: 1px solid var(--line); background: var(--surface); position: relative; z-index: 3; }
+.tl-labels .axis-spacer { height: 26px; border-bottom: 1px solid var(--line); }
+.lane-label { height: var(--lane-h); display: grid; align-content: center; gap: 1px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.lane-label:last-child { border-bottom: 0; }
+.lane-label b { font: 700 18px/1 var(--font-mono); }
+.lane-label small { font: 500 10px var(--font-mono); color: var(--muted); }
+.lane-label .pin { color: var(--accent); font-size: 10px; }
+.tl-scroll { overflow-x: auto; overflow-y: hidden; position: relative; touch-action: pan-x; overscroll-behavior-x: contain; }
+.tl-canvas { position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.tl-axis { height: 26px; position: relative; border-bottom: 1px solid var(--line); }
+.tl-axis span { position: absolute; top: 6px; transform: translateX(-50%); font: 500 10.5px var(--font-mono); color: var(--muted); white-space: nowrap; }
+.tl-axis span.min { color: var(--fg); font-weight: 600; }
+.tl-grid { position: absolute; left: 0; right: 0; top: 26px; bottom: 0; pointer-events: none; }
+.tl-grid .t12 { position: absolute; inset: 0; }
+.gl { position: absolute; top: 0; bottom: 0; width: 1px; }
+.gl.t3 { background: var(--t3); }
+.gl.t4 { background: var(--t4); width: 2px; margin-left: -.5px; }
+.lane { position: relative; height: var(--lane-h); border-bottom: 1px solid var(--line); }
+.lane:last-child { border-bottom: 0; }
+.blk { position: absolute; top: 9px; height: 34px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; gap: 4px; padding: 0 5px;
+  font: 500 11px/1.1 var(--font-mono); white-space: nowrap; cursor: pointer; z-index: 2; }
+.blk.pour { background: var(--pour); color: var(--pour-ink); }
+.blk.op { background: var(--op); color: var(--op-ink); padding: 0 2px; justify-content: center; }
+.blk.wait { background: repeating-linear-gradient(-45deg, var(--surface-2) 0 4px, transparent 4px 8px), var(--surface); color: var(--muted); border: 1px solid var(--line-strong); }
+.blk.custom { border: 1.5px dashed var(--fg); color: var(--fg); background: var(--surface); }
+.blk.custom.hands { background: var(--surface-2); }
+.blk.custom:not(.hands) { background: repeating-linear-gradient(-45deg, var(--surface-2) 0 4px, transparent 4px 8px), var(--surface); }
+.blk .end { opacity: .8; margin-left: auto; padding-left: 4px; }
+.blk.sel { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 4; }
+.blk.hl { box-shadow: 0 0 0 2px var(--accent); }
+.blk.flag::after { content: "!"; position: absolute; top: 1px; right: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--err); color: #fff; font: 700 9px/13px var(--font-mono); text-align: center; }
+.lane.ro .blk { opacity: .62; }
+.tl-canvas.editing .lane.ro .blk { opacity: .5; }
+.blk .sw { display: inline-flex; align-items: center; gap: 2px; }
+.valve { position: absolute; top: 45px; height: 5px; border-radius: 2px; z-index: 1; }
+.valve.closed { background: var(--valve-closed); }
+.valve.open { background: repeating-linear-gradient(90deg, var(--valve-open) 0 3px, transparent 3px 5px); border: 1px solid var(--valve-closed); height: 5px; }
+.handle { position: absolute; top: 5px; height: 42px; width: 24px; margin-left: -12px; z-index: 6; cursor: ew-resize; touch-action: none; display: none; }
+.handle::after { content: ""; position: absolute; left: 10px; top: 9px; bottom: 9px; width: 4px; border-radius: 2px; background: var(--fg); opacity: .55; }
+.handle.trade::after { background: var(--accent); opacity: 1; }
+.tl-canvas.editing .handle { display: block; }
+.lanestart { position: absolute; top: 3px; width: 24px; height: 52px; margin-left: -12px; z-index: 7; cursor: ew-resize; touch-action: none; display: none; }
+.lanestart::before { content: ""; position: absolute; left: 11px; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+.lanestart::after { content: "⇔"; position: absolute; left: 3px; top: -1px; width: 18px; height: 16px; border-radius: 3px; background: var(--accent); color: var(--accent-ink); font: 700 10px/16px var(--font-mono); text-align: center; }
+.tl-canvas.editing .lanestart { display: block; }
+.tl-canvas.editing .lane.a .blk { touch-action: none; cursor: grab; }
+.band { position: absolute; top: 26px; bottom: 0; z-index: 1; pointer-events: none; }
+.band.clash { background: color-mix(in srgb, var(--err) 26%, transparent); border-left: 1px solid var(--err); border-right: 1px solid var(--err); }
+.band.tight { background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--warn) 45%, transparent) 0 2px, transparent 2px 4px); min-width: 2px; }
+.limit-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--err); z-index: 5; pointer-events: none; }
+.limit-line span { position: absolute; top: 4px; left: 4px; font: 600 10px var(--font-mono); color: var(--err); background: var(--surface); padding: 0 3px; white-space: nowrap; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 8; pointer-events: none; }
+.playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--accent); }
+.drop-mark { position: absolute; top: 4px; bottom: 4px; width: 3px; background: var(--accent); z-index: 9; border-radius: 2px; }
+.tip { position: fixed; z-index: 60; pointer-events: none; background: var(--fg); color: var(--bg); padding: 5px 8px; border-radius: 5px; font: 500 11.5px/1.35 var(--font-mono); white-space: nowrap; }
+.ghost { opacity: .35; }
+
+/* deck */
+.deck { display: grid; gap: 12px; padding-block: 12px 40px; grid-template-columns: minmax(0, 1fr); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
+.panel > header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.panel .body { padding: 12px; display: grid; gap: 12px; min-width: 0; }
+.tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 0 6px; }
+.tabs button { border: 0; background: transparent; padding: 10px 10px 8px; cursor: pointer; font: 500 12px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tabs .count { font-size: 10px; margin-left: 3px; }
+@media (min-width: 1000px) {
+  .deck { grid-template-columns: minmax(380px, 5fr) minmax(0, 6fr); align-items: start; }
+  .tabs button[data-tab="recipe"] { display: none; }
+}
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 520px) { .grid3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.stats > div { background: var(--surface-2); padding: 7px 9px; display: grid; gap: 2px; }
+.stats b { font: 600 16px var(--font-mono); font-variant-numeric: tabular-nums; }
+.steps { display: grid; gap: 4px; }
+.srow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; padding: 6px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.srow.sel { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.srow .idx { font: 600 11px var(--font-mono); color: var(--faint); text-align: right; }
+.srow .main { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.srow .main input[type="text"] { width: 120px; flex: 1 1 100px; }
+.srow .times { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font: 500 11.5px var(--font-mono); color: var(--muted); }
+.srow .times .flag { color: var(--err); font-weight: 600; }
+.srow .times .wflag { color: var(--warn); font-weight: 600; }
+.srow .ctl { display: flex; gap: 2px; }
+.defining { border-color: var(--accent) !important; }
+.issues { display: grid; gap: 6px; }
+.issue { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 9px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface); text-align: left; cursor: pointer; }
+.issue.err { border-left: 4px solid var(--err); }
+.issue.warn { border-left: 4px solid var(--warn); }
+.issue small { color: var(--muted); display: block; font-size: 12px; }
+.stagger-wrap { overflow-x: auto; }
+canvas.stagger { display: block; width: 100%; height: 54px; border-radius: 4px; cursor: pointer; touch-action: manipulation; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 5px; }
+.sw-clear { background: var(--ok); } .sw-tight { background: var(--warn); } .sw-clash { background: var(--err); } .sw-over { background: repeating-linear-gradient(-45deg, var(--ok) 0 2px, var(--surface) 2px 4px); border: 1px solid var(--ok); } .sw-off { background: var(--line); }
+.plist { display: grid; gap: 6px; }
+.prow { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; }
+.lib-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 5px; }
+.lib-row.open { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.lib-row .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font: 500 11.5px var(--font-mono); color: var(--muted); }
+.lib-row .acts { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; align-items: start; }
+.subhead { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+.subhead::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--font-mono); }
+.disabled-zone { opacity: .5; pointer-events: none; }
+
+/* preview panels (shared with bar mode) */
+.now-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 560px) { .now-grid { grid-template-columns: minmax(0, 1fr); } }
+.donow, .next { border-radius: var(--r); padding: 12px; border: 1px solid var(--line); background: var(--surface-2); display: grid; gap: 4px; min-width: 0; }
+.donow.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.donow.active .lbl { color: var(--accent-ink); }
+.donow.clash { background: var(--err); border-color: var(--err); color: #fff; }
+.donow.clash .lbl { color: #fff; }
+.next.cue { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), inset 0 0 0 1px var(--accent); }
+.big { font: 600 22px/1.15 var(--font-sans); }
+.cards { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.dcard { border: 1px solid var(--line); border-radius: var(--r); padding: 9px 10px; display: grid; gap: 3px; background: var(--surface); }
+.dcard.hands { border-color: var(--accent); }
+.dcard .top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.dcard b.l { font: 700 20px/1 var(--font-mono); }
+.sheet { display: grid; gap: 2px; max-height: 280px; overflow-y: auto; }
+.sheet button { display: grid; grid-template-columns: 64px 26px minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left; padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; font-size: 13px; }
+.sheet button:hover { background: var(--surface-2); }
+.sheet button.past { opacity: .45; }
+.sheet button.cur { background: var(--accent-soft); }
+body.cue-pre::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 100; box-shadow: inset 0 0 0 6px var(--accent); animation: edge 1s ease-in-out infinite alternate; }
+@keyframes edge { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { body.cue-pre::after { animation: none; opacity: 1; } * { scroll-behavior: auto !important; } }
+
+/* modal */
+.scrim { position: fixed; inset: 0; background: color-mix(in srgb, var(--fg) 40%, transparent); z-index: 70; display: grid; place-items: end center; padding: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
+@media (min-width: 640px) { .scrim { place-items: center; } }
+.modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; width: min(560px, 100%); max-height: min(82vh, 760px); overflow-y: auto; display: grid; }
+.modal > header { position: sticky; top: 0; background: var(--surface); display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); z-index: 1; }
+.modal .body { padding: 14px; display: grid; gap: 12px; }
+.addgrid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.addgrid button { text-align: left; padding: 8px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; display: grid; gap: 2px; }
+.addgrid button:hover { border-color: var(--accent); }
+.addgrid small { font: 500 11px var(--font-mono); color: var(--muted); }
+.toast-host { position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 90; display: grid; gap: 6px; width: min(460px, calc(100% - 32px)); pointer-events: none; }
+.toast { background: var(--fg); color: var(--bg); border-radius: 7px; padding: 9px 12px; font-size: 13px; pointer-events: auto; display: flex; gap: 10px; align-items: center; }
+.toast button { color: var(--accent); background: transparent; border: 0; font-weight: 600; cursor: pointer; }
+
+/* bar mode */
+.bar { min-height: 100vh; display: grid; align-content: start; gap: 14px; padding-block: 14px 40px; }
+.bar .clock { font: 600 64px/1 var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.bar .donow .big, .bar .next .big { font-size: 26px; }
+.bar.large .clock { font-size: 96px; }
+.bar.large .donow .big, .bar.large .next .big { font-size: 39px; }
+.bar.large .now-grid { grid-template-columns: minmax(0, 1fr); }
+.bar.large .cards { grid-template-columns: minmax(0, 1fr); }
+.bar .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+.bar .seg button { min-height: 44px; padding: 0 14px; }
+.leadin { font: 600 120px/1 var(--font-mono); text-align: center; }
+.compact { position: relative; height: 92px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
+.compact .cl { position: absolute; left: 0; right: 0; height: 28px; }
+.compact .cb { position: absolute; top: 4px; height: 20px; border-radius: 3px; font: 500 10px/20px var(--font-mono); padding: 0 4px; overflow: hidden; white-space: nowrap; }
+.compact .now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast-host" id="toasts" aria-live="polite"></div>
+<script>
+'use strict';
+/* ===================== utilities ===================== */
+const PBS_VERSION = '0.7-p1';
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith('aria-') && typeof v === 'boolean') { el.setAttribute(k, String(v)); continue; }
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else if (k === 'style') el.style.cssText = v;
+    else if (k === 'dataset') Object.assign(el.dataset, v);
+    else if (k === 'value') el.value = v;
+    else if (k === 'checked') el.checked = !!v;
+    else if (v === true) el.setAttribute(k, '');
+    else el.setAttribute(k, String(v));
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function fmt(s) { s = Math.round(s); const neg = s < 0; s = Math.abs(s); return (neg ? '−' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function parseClock(str) {
+  str = String(str).trim();
+  let m = str.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (m) { if (+m[2] > 59) return null; return +m[1] * 60 + +m[2]; }
+  if (/^\d+$/.test(str)) return +str;
+  return null;
+}
+function uid(p) { const r = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36)); return p + '-' + r; }
+const deep = o => JSON.parse(JSON.stringify(o));
+const nowIso = () => new Date().toISOString();
+function todayStr() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function ago(iso) {
+  if (!iso) return 'never';
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago'; return new Date(iso).toLocaleDateString();
+}
+/* Sanitising (FR13): strip control chars and < >, cap length. All user text is rendered with textContent only. */
+const cleanText = (s, max) => String(s ?? '').replace(/[\u0000-\u001F\u007F<>]/g, '').slice(0, max);
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+/* ===================== constants ===================== */
+const MAX_LEN = 1800, MAX_STEPS = 30;
+const CATS = ['pour', 'wait', 'op', 'custom'];
+const CAT_LABEL = { pour: 'Pour', wait: 'Wait', op: 'Op', custom: 'Custom' };
+const LETTERS = ['A', 'B', 'C'];
+const D = s => ({ mode: 'duration', seconds: s });
+const U = s => ({ mode: 'until', atS: s });
+const SEED_PRESETS = [
+  { id: 'seed-pour-bloom', category: 'pour', name: 'Bloom', timing: D(10), addG: 50, origin: 'seed' },
+  { id: 'seed-pour-main', category: 'pour', name: 'Main', timing: D(15), addG: 100, origin: 'seed' },
+  { id: 'seed-pour-pulse', category: 'pour', name: 'Pulse', timing: D(8), addG: 50, origin: 'seed' },
+  { id: 'seed-pour-final', category: 'pour', name: 'Final', timing: D(20), addG: 75, origin: 'seed' },
+  { id: 'seed-wait-bloom-rest', category: 'wait', name: 'Bloom rest', timing: D(30), addG: null, origin: 'seed' },
+  { id: 'seed-wait-steep', category: 'wait', name: 'Steep', timing: D(30), addG: null, origin: 'seed' },
+  { id: 'seed-wait-drain', category: 'wait', name: 'Drain', timing: D(30), addG: null, origin: 'seed' },
+  { id: 'seed-wait-rest', category: 'wait', name: 'Rest', timing: D(10), addG: null, origin: 'seed' },
+  { id: 'sys-op-switch', category: 'op', name: 'Switch', timing: D(2), addG: null, isSwitch: true, origin: 'system' },
+  { id: 'seed-op-stir', category: 'op', name: 'Stir', timing: D(3), addG: null, origin: 'seed' },
+  { id: 'seed-op-swirl', category: 'op', name: 'Swirl', timing: D(3), addG: null, origin: 'seed' },
+  { id: 'seed-op-smell', category: 'op', name: 'Smell / aroma check', timing: D(3), addG: null, origin: 'seed' },
+  { id: 'seed-op-remove', category: 'op', name: 'Remove dripper', timing: D(3), addG: null, origin: 'seed' },
+];
+function mkStep(category, name, presetId, timing, pourToG, dir) {
+  const s = { id: uid('s'), category, presetId: presetId || null, name, timing: deep(timing), pourToG: (category === 'pour' || category === 'custom') ? (pourToG ?? null) : null };
+  if (dir) { s.isSwitch = true; s.switchDirection = dir; }
+  if (category === 'custom') s.handsOn = true;
+  return s;
+}
+const BUILTINS = [
+  { id: 'builtin-neo-switch', name: 'Neo + Switch hybrid', doseG: 15, tempC: 93, initialValve: 'closed', steps: () => [
+    mkStep('pour', 'Bloom', 'seed-pour-bloom', D(10), 50),
+    mkStep('op', 'Swirl', 'seed-op-swirl', D(3)),
+    mkStep('wait', 'Bloom rest', 'seed-wait-bloom-rest', U(45)),
+    mkStep('pour', 'Main', 'seed-pour-main', D(15), 150),
+    mkStep('wait', 'Steep', 'seed-wait-steep', U(90)),
+    mkStep('op', 'Switch', 'sys-op-switch', D(2), null, 'open'),
+    mkStep('pour', 'Final', 'seed-pour-final', D(18), 225),
+    mkStep('wait', 'Drain', 'seed-wait-drain', D(50)),
+    mkStep('op', 'Remove dripper', 'seed-op-remove', D(3)) ] },
+  { id: 'builtin-v60-three', name: 'V60 three-pour', doseG: 15, tempC: 93, initialValve: 'none', steps: () => [
+    mkStep('pour', 'Bloom', 'seed-pour-bloom', D(10), 45),
+    mkStep('wait', 'Bloom rest', 'seed-wait-bloom-rest', U(30)),
+    mkStep('pour', 'Second pour', 'seed-pour-main', U(57), 125),
+    mkStep('wait', 'Drain', 'seed-wait-drain', U(90)),
+    mkStep('pour', 'Third pour', 'seed-pour-main', U(120), 225),
+    mkStep('wait', 'Drain', 'seed-wait-drain', U(150)),
+    mkStep('op', 'Remove dripper', 'seed-op-remove', D(3)) ] },
+];
+
+/* ===================== scheduling core (pure) ===================== */
+function isHandsOn(s) { return s.category === 'pour' || s.category === 'op' || (s.category === 'custom' && !!s.handsOn); }
+/* FR9 resolution: step 1 at 0:00; duration ends at start+N; until ends at its time (anchor); invalid until → 1 s. */
+function resolve(recipe) {
+  let t = 0, valve = recipe.initialValve;
+  const rows = [];
+  recipe.steps.forEach((s, i) => {
+    const start = t; let end, invalid = false;
+    if (s.timing.mode === 'duration') end = start + s.timing.seconds;
+    else if (s.timing.atS <= start) { invalid = true; end = start + 1; }
+    else end = s.timing.atS;
+    const valveDuring = valve;
+    if (s.isSwitch && recipe.initialValve !== 'none') valve = s.switchDirection === 'open' ? 'open' : 'closed';
+    rows.push({ step: s, i, start, end, dur: end - start, invalid, handsOn: isHandsOn(s), valve: valveDuring, valveAfter: valve });
+    t = end;
+  });
+  return { rows, length: t, endValve: valve };
+}
+function dripperStarts(p) {
+  const B = p.defaultGapS, C = p.pinnedStartC ?? 2 * p.defaultGapS;
+  return [0, B, C].slice(0, p.drippers);
+}
+function recipeIssues(recipe, res) {
+  const out = [];
+  let prevW = null, maxW = null, valve = recipe.initialValve;
+  for (const r of res.rows) {
+    const s = r.step, at = { stepId: s.id, t: r.start };
+    if (r.invalid) out.push({ ...at, kind: 'recipe', sev: 'error', title: 'Ends before it starts', detail: `${s.name}: until ${fmt(s.timing.atS)} is at or before its start (${fmt(r.start)}).` });
+    const hasW = s.category === 'pour' || (s.category === 'custom' && s.pourToG != null);
+    if (s.category === 'pour' && !(s.pourToG > 0)) out.push({ ...at, kind: 'recipe', sev: 'error', title: 'Pour has no weight', detail: `${s.name} needs a pour-to weight.` });
+    else if (hasW && s.pourToG > 0) {
+      if (maxW != null && s.pourToG < maxW) out.push({ ...at, kind: 'recipe', sev: 'error', title: 'Pour-to goes down', detail: `${s.name} pours to ${s.pourToG} g, below an earlier ${maxW} g.` });
+      else if (prevW != null && s.pourToG === prevW) out.push({ ...at, kind: 'recipe', sev: 'warning', title: 'Pour adds no water', detail: `${s.name} pours to ${s.pourToG} g, the same as the previous pour.` });
+      prevW = s.pourToG; maxW = Math.max(maxW ?? 0, s.pourToG);
+    }
+    if (s.isSwitch) {
+      const target = s.switchDirection === 'open' ? 'open' : 'closed';
+      if (recipe.initialValve === 'none') out.push({ ...at, kind: 'recipe', sev: 'warning', title: 'Switch changes nothing', detail: `${s.name}: this recipe has no valve (plain V60). Remove the step.` });
+      else { if (valve === target) out.push({ ...at, kind: 'recipe', sev: 'warning', title: 'Switch changes nothing', detail: `${s.name} sets the valve ${target}, but it is already ${target}.` }); valve = target; }
+    }
+  }
+  if (recipe.initialValve !== 'none' && valve === 'closed' && res.rows.length) out.push({ kind: 'recipe', sev: 'warning', title: 'Valve closed at the end', detail: 'The recipe ends with the valve closed, so the brew never drains.', stepId: res.rows[res.rows.length - 1].step.id, t: res.length });
+  return out;
+}
+/* Hands-on intervals per dripper (session clock). */
+function handsIntervals(res) { return res.rows.filter(r => r.handsOn).map(r => [r.start, r.end, r]); }
+function pipelineConflicts(hands, starts, move) {
+  const clashes = [], tights = [];
+  for (let a = 0; a < starts.length; a++) for (let b = a + 1; b < starts.length; b++) {
+    const oa = starts[a], ob = starts[b];
+    for (const x of hands) for (const y of hands) {
+      const xs = x[0] + oa, xe = x[1] + oa, ys = y[0] + ob, ye = y[1] + ob;
+      if (xs < ye && ys < xe) clashes.push({ d: [a, b], rows: [x[2], y[2]], s: Math.max(xs, ys), e: Math.min(xe, ye) });
+      else {
+        const gap = xs >= ye ? xs - ye : ys - xe;
+        if (gap < move) tights.push({ d: [a, b], rows: [x[2], y[2]], s: xs >= ye ? ye : xe, e: xs >= ye ? xs : ys, gap });
+      }
+    }
+  }
+  return { clashes, tights };
+}
+/* Fast status for the stagger map: 0 clear, 1 tight, 2 clash. */
+function pipelineStatus(hands, starts, move) {
+  let st = 0;
+  for (let a = 0; a < starts.length; a++) for (let b = a + 1; b < starts.length; b++) {
+    const off = starts[b] - starts[a];
+    for (const x of hands) for (const y of hands) {
+      const ys = y[0] + off, ye = y[1] + off;
+      if (x[0] < ye && ys < x[1]) return 2;
+      const gap = x[0] >= ye ? x[0] - ye : ys - x[1];
+      if (gap < move) st = 1;
+    }
+  }
+  return st;
+}
+function sessionEnd(res, starts) { return Math.max(...starts) + res.length; }
+/* FR6 stagger map: one column per default gap 0 … length + move. */
+function staggerColumns(recipe, res) {
+  const p = recipe.pipeline, hands = handsIntervals(res), max = res.length + p.moveTimeS, cols = [];
+  const cActive = p.drippers === 3, pinned = cActive ? p.pinnedStartC : null;
+  for (let g = 0; g <= max; g++) {
+    const starts = [0, g, pinned ?? 2 * g].slice(0, Math.max(2, p.drippers));
+    const blocked = g > 600 || (pinned != null && g > pinned);
+    const status = pipelineStatus(hands, starts, p.moveTimeS);
+    const end = Math.max(...starts) + res.length;
+    cols.push({ g, status, blocked, over: p.timeLimitS != null && end > p.timeLimitS });
+  }
+  return cols;
+}
+function gapGuidance(recipe, res, cols) {
+  const firstClear = cols.find(c => !c.blocked && c.status === 0);
+  const firstClearInLimit = cols.find(c => !c.blocked && c.status === 0 && !c.over);
+  const ranges = []; let cur = null;
+  for (const c of cols) {
+    if (!c.blocked && c.status === 0) { if (cur && cur[1] === c.g - 1) cur[1] = c.g; else ranges.push(cur = [c.g, c.g]); }
+  }
+  return { firstClear, firstClearInLimit, ranges };
+}
+function smallestClearGap(recipe) {
+  const res = resolve(recipe);
+  const r = deep(recipe); r.pipeline.drippers = Math.max(2, r.pipeline.drippers);
+  const c = staggerColumns(r, res).find(c => !c.blocked && c.status === 0);
+  return c ? c.g : null;
+}
+/* Everything derived from the open recipe, computed once per render. */
+function analyse(recipe) {
+  const res = resolve(recipe), p = recipe.pipeline, starts = dripperStarts(p);
+  const hands = handsIntervals(res);
+  const conf = p.drippers > 1 ? pipelineConflicts(hands, starts, p.moveTimeS) : { clashes: [], tights: [] };
+  const end = sessionEnd(res, starts);
+  const rIssues = recipeIssues(recipe, res);
+  const pIssues = [];
+  for (const c of conf.clashes) pIssues.push({ kind: 'pipeline', sev: 'error', title: 'Clash', detail: `${LETTERS[c.d[0]]} · ${c.rows[0].step.name} overlaps ${LETTERS[c.d[1]]} · ${c.rows[1].step.name} (${fmt(c.s)}–${fmt(c.e)}).`, t: c.s });
+  for (const c of conf.tights) pIssues.push({ kind: 'pipeline', sev: 'warning', title: 'Tight spot', detail: `${LETTERS[c.d[0]]} · ${c.rows[0].step.name} and ${LETTERS[c.d[1]]} · ${c.rows[1].step.name} are ${c.gap} s apart at ${fmt(c.s)}; move time is ${p.moveTimeS} s.`, t: c.s });
+  if (p.timeLimitS != null && end > p.timeLimitS) pIssues.push({ kind: 'pipeline', sev: 'error', title: `Over time limit by ${fmt(end - p.timeLimitS)}`, detail: `The session ends at ${fmt(end)}; the limit is ${fmt(p.timeLimitS)}.`, t: p.timeLimitS });
+  pIssues.sort((a, b) => a.t - b.t);
+  const all = [...rIssues, ...pIssues];
+  const errors = all.filter(i => i.sev === 'error').length, warnings = all.length - errors;
+  const flagged = new Set(rIssues.map(i => i.stepId).filter(Boolean));
+  const waterRows = res.rows.filter(r => r.step.pourToG > 0 && (r.step.category === 'pour' || r.step.category === 'custom'));
+  const totalWater = waterRows.length ? waterRows[waterRows.length - 1].step.pourToG : 0;
+  return { res, starts, hands, conf, end, rIssues, pIssues, all, errors, warnings, flagged, totalWater, barReady: errors === 0 };
+}
+
+/* ===================== storage & state (FR11, FR13) ===================== */
+const KEY = 'parallel-brew-scheduler.v2';
+let storageOK = true;
+function readStorage() {
+  try {
+    const ls = window.localStorage;
+    ls.setItem(KEY + '.probe', '1'); ls.removeItem(KEY + '.probe');
+    const raw = ls.getItem(KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { storageOK = false; return null; }
+}
+let saveTimer = null;
+function save(now) {
+  if (!storageOK) return;
+  const write = () => { saveTimer = null; try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { storageOK = false; render(); } };
+  if (now) { clearTimeout(saveTimer); write(); } else if (!saveTimer) saveTimer = setTimeout(write, 120);
+}
+function defaultDevice() { return { leadInS: 5, sound: true, largeText: false, theme: 'system' }; }
+function seedPresets() { return deep(SEED_PRESETS); }
+function newRecipeFromBuiltin(b) {
+  const r = { id: uid('r'), name: b.name, fromBuiltIn: b.id, doseG: b.doseG, tempC: b.tempC, grind: '', notes: '', initialValve: b.initialValve,
+    steps: b.steps(), pipeline: { drippers: 3, defaultGapS: 0, pinnedStartC: null, moveTimeS: 3, timeLimitS: null }, updatedAt: nowIso() };
+  r.pipeline.defaultGapS = smallestClearGap(r) ?? 60;
+  return r;
+}
+function newBlankRecipe() {
+  const bloom = S.presets.find(p => p.id === 'seed-pour-bloom') || SEED_PRESETS[0];
+  const r = { id: uid('r'), name: uniqueName('New recipe', S.recipes.map(x => x.name), 60), fromBuiltIn: null, doseG: 15, tempC: 93, grind: '', notes: '', initialValve: 'none',
+    steps: [mkStep('pour', bloom.name, bloom.id, bloom.timing, bloom.addG || 50)], pipeline: { drippers: 2, defaultGapS: 0, pinnedStartC: null, moveTimeS: 3, timeLimitS: null }, updatedAt: nowIso() };
+  r.pipeline.defaultGapS = smallestClearGap(r) ?? 60;
+  return r;
+}
+function uniqueName(base, names, max) {
+  if (!names.includes(base)) return base;
+  for (let n = 2; ; n++) { const c = cleanText(base, max - String(n).length - 1) + ' ' + n; if (!names.includes(c)) return c; }
+}
+let S = readStorage();
+const firstLaunch = !S;
+if (!S || !Array.isArray(S.recipes)) {
+  S = { recipes: [], presets: seedPresets(), openRecipeId: null, lastExportedAt: null, activeRun: null, deviceSettings: defaultDevice(), exportSnapshot: null };
+}
+S.deviceSettings = Object.assign(defaultDevice(), S.deviceSettings || {});
+if (!Array.isArray(S.presets) || !S.presets.some(p => p.isSwitch)) S.presets = mergeMissingSeeds(S.presets || []);
+if (!S.recipes.length) { const r = newRecipeFromBuiltin(BUILTINS[0]); S.recipes.push(r); S.openRecipeId = r.id; }
+if (!S.recipes.some(r => r.id === S.openRecipeId)) S.openRecipeId = S.recipes[0].id;
+save(true);
+function mergeMissingSeeds(list) { const have = new Set(list.map(p => p.id)); return [...list, ...seedPresets().filter(p => !have.has(p.id))]; }
+
+const ui = {
+  tab: 'issues', tlMode: 'edit', zoom: 6, trade: false, selectedId: null, selectedLane: 0, playhead: 0, playing: false, speed: 1,
+  confirm: {}, renameId: null, modal: null, drag: null, lastImport: null, importText: '', importScope: 'both', exportScope: 'everything',
+  bar: null, cueBefore: new Set(), cueStart: new Set(),
+};
+const rec = () => S.recipes.find(r => r.id === S.openRecipeId);
+let history = { past: [], future: [] };
+const snap = r => JSON.stringify({ ...r, updatedAt: undefined });
+
+/* Every recipe/pipeline edit goes through edit(): pushes undo, stamps updatedAt, autosaves, re-renders. */
+function edit(fn, opts = {}) {
+  if (ui.playing) { toast('Pause the preview to edit.'); return false; }
+  const r = rec(), before = snap(r);
+  const backup = deep(r);
+  const result = fn(r);
+  if (result === false) { Object.assign(r, backup); render(); return false; }
+  if (resolve(r).length > MAX_LEN) { Object.assign(r, backup); toast('That would push the recipe past 30:00, the maximum length.'); render(); return false; }
+  if (snap(r) === before) { render(); return true; }
+  if (!opts.noHistory) { history.past.push(before); if (history.past.length > 60) history.past.shift(); history.future = []; }
+  r.updatedAt = nowIso();
+  save(); render();
+  return true;
+}
+function restoreSnap(r, s) { const o = JSON.parse(s); for (const k of Object.keys(r)) delete r[k]; Object.assign(r, o, { updatedAt: nowIso() }); }
+function undo() { if (!history.past.length) return; const r = rec(); history.future.push(snap(r)); restoreSnap(r, history.past.pop()); save(); render(); toast('Undone.'); }
+function redo() { if (!history.future.length) return; const r = rec(); history.past.push(snap(r)); restoreSnap(r, history.future.pop()); save(); render(); toast('Redone.'); }
+function openRecipe(id) { S.openRecipeId = id; history = { past: [], future: [] }; ui.selectedId = null; ui.playhead = 0; stopPreview(); save(); render(); }
+
+/* ===================== recipe edit operations ===================== */
+function stepIndex(r, id) { return r.steps.findIndex(s => s.id === id); }
+function valveBefore(r, idx) { const res = resolve(r); return idx > 0 ? res.rows[idx - 1].valveAfter : r.initialValve; }
+function lastWeightBefore(r, idx) { for (let i = idx - 1; i >= 0; i--) { const s = r.steps[i]; if ((s.category === 'pour' || s.category === 'custom') && s.pourToG > 0) return s.pourToG; } return 0; }
+/* FR9 "add at a time": goes after the last step ending strictly before T. */
+function indexForTime(r, T) { const rows = resolve(r).rows; let idx = 0; rows.forEach((row, i) => { if (row.end < T) idx = i + 1; }); return idx; }
+function stepFromPreset(r, preset, idx) {
+  const s = mkStep(preset.category, preset.name, preset.id, preset.timing, null);
+  if (preset.category === 'pour') s.pourToG = lastWeightBefore(r, idx) + (preset.addG || 0);
+  if (preset.category === 'custom') { s.handsOn = !!preset.handsOn; s.pourToG = preset.addG ? lastWeightBefore(r, idx) + preset.addG : null; }
+  if (preset.isSwitch) { s.isSwitch = true; s.switchDirection = valveBefore(r, idx) === 'open' ? 'close' : 'open'; }
+  return s;
+}
+function blankStep(r, cat, idx) {
+  const names = { pour: 'Pour', wait: 'Wait', op: 'Op', custom: 'Custom step' };
+  const s = mkStep(cat, names[cat], null, D(cat === 'op' ? 3 : 10), null);
+  if (cat === 'pour') s.pourToG = lastWeightBefore(r, idx) + 50;
+  return s;
+}
+function insertStep(make, where) {
+  return edit(r => {
+    if (r.steps.length >= MAX_STEPS) { toast('A recipe holds at most 30 steps.'); return false; }
+    let idx = where.index;
+    if (where.atS != null) idx = indexForTime(r, where.atS);
+    const s = make(r, idx);
+    if (where.atS != null) s.timing = U(where.atS);
+    r.steps.splice(idx, 0, s);
+    ui.selectedId = s.id; ui.selectedLane = 0;
+  });
+}
+function deleteStep(id) {
+  edit(r => { if (r.steps.length <= 1) { toast('A recipe needs at least one step.'); return false; } r.steps.splice(stepIndex(r, id), 1); ui.selectedId = null; });
+}
+function duplicateStep(id) {
+  edit(r => { if (r.steps.length >= MAX_STEPS) { toast('A recipe holds at most 30 steps.'); return false; } const i = stepIndex(r, id); const c = deep(r.steps[i]); c.id = uid('s'); r.steps.splice(i + 1, 0, c); ui.selectedId = c.id; });
+}
+function moveStep(id, to) { edit(r => { const i = stepIndex(r, id); if (i < 0) return false; const [s] = r.steps.splice(i, 1); r.steps.splice(clamp(to, 0, r.steps.length), 0, s); }); }
+/* Switching mode keeps resolved times (FR9). */
+function setTimingMode(id, mode) {
+  edit(r => {
+    const i = stepIndex(r, id), s = r.steps[i], row = resolve(r).rows[i];
+    if (s.timing.mode === mode) return false;
+    s.timing = mode === 'until' ? U(row.end) : D(row.invalid ? 1 : row.dur);
+  });
+}
+/* Typed values are taken as entered (within the data model's ranges) and flagged if they create an issue. */
+function setTimingValue(id, raw) {
+  const r = rec(), s = r.steps[stepIndex(r, id)];
+  if (s.timing.mode === 'duration') {
+    const v = parseInt(raw, 10);
+    if (!(v >= 1 && v <= 600)) { toast('Duration must be 1–600 s.'); render(); return; }
+    edit(r2 => { r2.steps[stepIndex(r2, id)].timing = D(v); });
+  } else {
+    const v = parseClock(raw);
+    if (v == null || v < 1 || v > MAX_LEN) { toast('Enter an until time between 0:01 and 30:00, as m:ss.'); render(); return; }
+    edit(r2 => { r2.steps[stepIndex(r2, id)].timing = U(v); });
+  }
+}
+function nudgeTiming(id, d) {
+  const r = rec(), s = r.steps[stepIndex(r, id)];
+  if (s.timing.mode === 'duration') setTimingValue(id, s.timing.seconds + d); else setTimingValue(id, fmt(s.timing.atS + d));
+}
+function setStepField(id, key, val) { edit(r => { const s = r.steps[stepIndex(r, id)]; s[key] = val; }); }
+function flipSwitch(id) { edit(r => { const s = r.steps[stepIndex(r, id)]; if (s.isSwitch) s.switchDirection = s.switchDirection === 'open' ? 'close' : 'open'; }); }
+function resetToPreset(id) {
+  edit(r => {
+    const i = stepIndex(r, id), s = r.steps[i], p = S.presets.find(x => x.id === s.presetId);
+    if (!p) return false;
+    s.name = p.name; s.timing = deep(p.timing);
+    if (p.category === 'pour') s.pourToG = lastWeightBefore(r, i) + (p.addG || 0);
+    if (p.category === 'custom') s.handsOn = !!p.handsOn;
+  });
+}
+function saveAsPreset(id, update) {
+  const r = rec(), i = stepIndex(r, id), s = r.steps[i];
+  const addG = (s.category === 'pour' || s.category === 'custom') && s.pourToG > 0 ? s.pourToG - lastWeightBefore(r, i) : null;
+  if (update) {
+    const p = S.presets.find(x => x.id === s.presetId); if (!p) return;
+    p.name = cleanText(s.name, 40); p.timing = deep(s.timing);
+    if (p.category === 'pour' || p.category === 'custom') p.addG = addG != null && addG > 0 ? addG : p.addG;
+    if (p.category === 'custom') p.handsOn = !!s.handsOn;
+    toast(`Updated preset “${p.name}”.`);
+  } else {
+    if (s.isSwitch) { toast('Only the system Switch preset can be a Switch.'); return; }
+    const p = { id: uid('p'), category: s.category, name: uniqueName(cleanText(s.name, 40), S.presets.map(x => x.name), 40), timing: deep(s.timing), addG: addG != null && addG > 0 ? addG : null, origin: 'user' };
+    if (s.category === 'custom') p.handsOn = !!s.handsOn;
+    S.presets.push(p);
+    edit(r2 => { r2.steps[stepIndex(r2, id)].presetId = p.id; }, { noHistory: true });
+    toast(`Saved preset “${p.name}”.`);
+  }
+  save(); render();
+}
+/* Pipeline edits with FR2 clamping. */
+function gapCap(p) { return p.drippers === 3 && p.pinnedStartC != null ? Math.min(600, p.pinnedStartC) : 600; }
+function setGap(v) { edit(r => { r.pipeline.defaultGapS = clamp(Math.round(v), 0, gapCap(r.pipeline)); }); }
+function setDrippers(n) {
+  edit(r => {
+    const p = r.pipeline; p.drippers = n;
+    if (n === 3 && p.pinnedStartC != null && p.pinnedStartC < p.defaultGapS) { p.pinnedStartC = null; toast('C was pinned earlier than B, so it now follows the default gap.'); }
+  });
+}
+function setPinnedC(v) { edit(r => { const p = r.pipeline; p.pinnedStartC = v == null ? null : clamp(Math.round(v), p.defaultGapS, 1200); }); }
+
+/* ===================== toasts & notices ===================== */
+function toast(msg, action) {
+  const host = document.getElementById('toasts');
+  const t = h('div', { class: 'toast', role: 'status' }, h('span', { text: msg }), action ? h('button', { text: action.label, onclick: () => { action.run(); t.remove(); } }) : null);
+  host.append(t); while (host.children.length > 3) host.firstChild.remove();
+  setTimeout(() => t.remove(), action ? 8000 : 3200);
+}
+
+/* ===================== render loop ===================== */
+let A = null; // analysis of the open recipe
+let rq = 0;
+function renderSoon() { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); }
+function render() {
+  applyTheme();
+  const app = document.getElementById('app');
+  const sc = app.querySelector('.tl-scroll'), scrollX = sc ? sc.scrollLeft : null;
+  const ae = document.activeElement, focusId = ae && ae.id && app.contains(ae) ? ae.id : null;
+  const sel = focusId && 'selectionStart' in ae ? [ae.selectionStart, ae.selectionEnd] : null;
+  const r = rec(); A = analyse(r);
+  app.replaceChildren(ui.bar ? renderBar(r) : renderDesign(r));
+  const sc2 = app.querySelector('.tl-scroll'); if (sc2 && scrollX != null) sc2.scrollLeft = scrollX;
+  if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) try { el.setSelectionRange(sel[0], sel[1]); } catch (e) {} } }
+  if (ui.modal) app.append(renderModal());
+  reuseRecipe = false;
+  drawStagger();
+}
+const hostTheme = document.documentElement.getAttribute('data-theme');
+function applyTheme() {
+  const t = S.deviceSettings.theme, root = document.documentElement;
+  if (t !== 'system') root.setAttribute('data-theme', t);
+  else if (hostTheme) root.setAttribute('data-theme', hostTheme); else root.removeAttribute('data-theme');
+}
+function statusPill(a) {
+  if (a.errors) return h('span', { class: 'pill err', title: 'Errors block Bar-ready' }, plural(a.errors, 'error') + (a.warnings ? ' · ' + plural(a.warnings, 'warning') : ''));
+  return h('span', { class: 'pill ok' }, 'Bar-ready' + (a.warnings ? ' · ' + plural(a.warnings, 'warning') : ''));
+}
+function renderDesign(r) {
+  const wide = matchMedia('(min-width: 1000px)').matches;
+  if (wide && ui.tab === 'recipe') ui.tab = 'step';
+  const themeNext = { system: 'light', light: 'dark', dark: 'system' };
+  return h('div', null,
+    h('header', { class: 'app-head' }, h('div', { class: 'inner wrap' },
+      h('div', { class: 'brand' }, h('b', { text: 'Parallel Brew Scheduler' }), h('span', { text: 'Design · prototype ' + PBS_VERSION })),
+      h('span', { class: 'recipe-title', title: r.name, text: r.name }),
+      statusPill(A),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', id: 'undo', disabled: !history.past.length || ui.playing, onclick: undo, title: 'Undo' }, '↶ Undo'),
+      h('button', { class: 'btn sm', id: 'redo', disabled: !history.future.length || ui.playing, onclick: redo, title: 'Redo' }, '↷ Redo'),
+      h('button', { class: 'btn sm', id: 'theme', onclick: () => { S.deviceSettings.theme = themeNext[S.deviceSettings.theme]; save(); render(); }, title: 'Theme' }, 'Theme: ' + S.deviceSettings.theme),
+      h('button', { class: 'btn primary', id: 'run-bar', onclick: enterBar }, 'Run at the bar ▸'))),
+    renderNotices(),
+    h('section', { class: 'workbench wrap' }, renderTimelineBar(r), renderTimeline(r)),
+    h('section', { class: 'deck wrap' }, wide ? h('div', { class: 'panel' }, h('header', null, h('h2', { text: 'Recipe' }), h('span', { class: 'spacer' }), h('span', { class: 'note', text: 'Saved automatically' })), recipeBody(r)) : null,
+      renderTabs(r, wide)));
+}
+let reuseRecipe = false;
+function recipeBody(r) {
+  const old = reuseRecipe && document.getElementById('recipe-body');
+  return old || renderRecipePanel(r);
+}
+function renderNotices() {
+  const list = [];
+  if (!storageOK) list.push(h('div', { class: 'notice err' }, h('b', { text: 'Nothing will be kept after you close this page. Export before leaving.' })));
+  const ch = changesSinceExport();
+  if (storageOK && ch.total && S.lastExportedAt) list.push(h('div', { class: 'notice' }, h('span', { text: `${plural(ch.total, 'change')} since your last export (${ago(S.lastExportedAt)}). The export file is your only backup.` }), h('span', { class: 'spacer' }), h('button', { class: 'btn sm', onclick: () => { ui.tab = 'library'; render(); } }, 'Export')));
+  return list.length ? h('div', { class: 'notices wrap', style: 'padding-top:10px' }, list) : null;
+}
+
+/* ===================== timeline (FR3, FR7) ===================== */
+const ZOOMS = ['fit', 3, 6, 12];
+function pxPerS(total) {
+  if (ui.drag && ui.drag.px) return ui.drag.px;
+  if (ui.zoom !== 'fit') return ui.zoom;
+  const sc = document.querySelector('.tl-scroll');
+  const w = sc ? sc.clientWidth : Math.max(320, window.innerWidth - 32 - 64);
+  return Math.max(0.15, (w - 6) / total);
+}
+function renderTimelineBar(r) {
+  const p = r.pipeline, pinned = p.drippers === 3 && p.pinnedStartC != null;
+  return h('div', { class: 'tl-bar' },
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Timeline mode' },
+      ['scrub', 'edit'].map(m => h('button', { id: 'mode-' + m, 'aria-pressed': ui.tlMode === m, disabled: ui.playing && m === 'edit', onclick: () => { ui.tlMode = m; render(); } }, m === 'scrub' ? 'Scrub' : 'Edit'))),
+    h('div', { class: 'seg' }, h('button', { id: 'trade', 'aria-pressed': ui.trade, disabled: ui.tlMode !== 'edit', title: 'Drag a boundary between two duration steps to move time from one to the other', onclick: () => { ui.trade = !ui.trade; render(); } }, 'Trade')),
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Zoom' }, ZOOMS.map(z => h('button', { 'aria-pressed': ui.zoom === z, onclick: () => { ui.zoom = z; render(); } }, z === 'fit' ? 'Fit' : z + ' px/s'))),
+    pinned ? h('span', { class: 'pill neutral', title: 'C is pinned' }, '📌 C pinned ' + fmt(p.pinnedStartC)) : null,
+    h('span', { class: 'spacer' }),
+    h('span', { class: 'mono', id: 'tl-clock', style: 'font-size:13px' }, fmt(ui.playhead), h('span', { class: 'note', text: ' / ' + fmt(A.end) })),
+    h('button', { class: 'btn sm', id: 'play', onclick: togglePreview, title: 'Preview playback' }, ui.playing ? '❚❚ Pause' : '▶ Preview'),
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Speed' }, [1, 4, 10].map(s => h('button', { 'aria-pressed': ui.speed === s, onclick: () => setSpeed(s) }, s + '×'))));
+}
+function renderTimeline(r) {
+  const p = r.pipeline, res = A.res, starts = A.starts;
+  const total = Math.max(A.end, p.timeLimitS || 0, 60) + 20;
+  const px = pxPerS(total), W = Math.ceil(total * px);
+  const editing = ui.tlMode === 'edit' && !ui.playing;
+  const canvas = h('div', { class: 'tl-canvas' + (editing ? ' editing' : ''), style: `width:${W}px`, dataset: { px: px } });
+  // axis + tier 3/4 lines
+  const axis = h('div', { class: 'tl-axis' });
+  const lblEvery = 30 * px >= 40 ? 30 : 60 * px >= 40 ? 60 : Math.ceil(40 / (60 * px)) * 60;
+  const grid = h('div', { class: 'tl-grid' });
+  const t12 = h('div', { class: 't12' });
+  const imgs = [], sizes = [];
+  if (px >= 1.5) { imgs.push('linear-gradient(90deg, var(--t2) 1px, transparent 1px)'); sizes.push(`${5 * px}px 100%`); }
+  if (px >= 4) { imgs.push('linear-gradient(90deg, var(--t1) 1px, transparent 1px)'); sizes.push(`${px}px 100%`); }
+  t12.style.backgroundImage = imgs.join(','); t12.style.backgroundSize = sizes.join(',');
+  grid.append(t12);
+  for (let s = 30; s <= total; s += 30) {
+    const minute = s % 60 === 0;
+    grid.append(h('div', { class: 'gl ' + (minute ? 't4' : 't3'), style: `left:${s * px}px` }));
+    if (s % lblEvery === 0) axis.append(h('span', { class: minute ? 'min' : '', style: `left:${s * px}px`, text: fmt(s) }));
+  }
+  axis.append(h('span', { style: 'left:0;transform:none;padding-left:3px', text: '0:00' }));
+  canvas.append(axis, grid);
+  const labels = h('div', { class: 'tl-labels' }, h('div', { class: 'axis-spacer' }));
+  for (let d = 0; d < p.drippers; d++) {
+    const off = starts[d], lane = h('div', { class: 'lane ' + (d === 0 ? 'a' : 'ro'), dataset: { d } });
+    labels.append(h('div', { class: 'lane-label' }, h('b', { text: LETTERS[d] }),
+      h('small', { text: d === 0 ? 'Reference' : fmt(off) + (d === 2 && p.pinnedStartC != null ? ' 📌' : ''), title: d === 2 && p.pinnedStartC != null ? 'C is pinned' : null })));
+    for (const row of res.rows) {
+      const s = row.step, x = (off + row.start) * px, w = Math.max(row.dur * px, s.category === 'op' ? 6 : 2);
+      const cls = ['blk', s.category, s.category === 'custom' && s.handsOn ? 'hands' : '', ui.selectedId === s.id ? (d === ui.selectedLane ? 'sel' : 'hl') : '', A.flagged.has(s.id) ? 'flag' : ''].join(' ');
+      const blk = h('div', { class: cls, style: `left:${x}px;width:${w}px`, dataset: { role: 'body', id: s.id, d }, title: `${LETTERS[d]} · ${s.name}: ${fmt(row.start)} → ${fmt(row.end)} (${row.dur} s) · session ${fmt(off + row.start)} → ${fmt(off + row.end)}` });
+      if (s.isSwitch) blk.append(h('span', { class: 'sw', dataset: { role: d === 0 ? 'switch' : 'body', id: s.id, d } }, (s.switchDirection === 'open' ? '◐' : '●') + (w > 70 ? ' Switch · ' + s.switchDirection : w > 26 ? ' ' + s.switchDirection : '')));
+      else if (s.category === 'op') blk.append(w > 40 ? h('span', { text: '• ' + s.name }) : h('span', { text: '•' }));
+      else if (w > 24) {
+        const label = s.category === 'pour' || (s.category === 'custom' && s.pourToG) ? (s.pourToG ? s.pourToG + ' g' : '? g') : s.name;
+        blk.append(h('span', { text: w > 90 && s.category === 'pour' ? s.name + ' ' + label : label }));
+        if (d === 0 && w > 92) blk.append(h('span', { class: 'end', text: '→ ' + fmt(row.end) }));
+      }
+      lane.append(blk);
+      if (r.initialValve !== 'none') lane.append(h('div', { class: 'valve ' + row.valve, style: `left:${x}px;width:${Math.max(row.dur * px, 2)}px`, title: 'Valve ' + row.valve }));
+    }
+    if (d === 0) res.rows.forEach((row, i) => {
+      const next = res.rows[i + 1];
+      const trade = ui.trade && next && row.step.timing.mode === 'duration' && next.step.timing.mode === 'duration';
+      lane.append(h('div', { class: 'handle' + (trade ? ' trade' : ''), style: `left:${row.end * px}px`, dataset: { role: trade ? 'trade' : 'edge', id: row.step.id }, title: trade ? 'Trade time between the two steps' : 'Drag to change the end' }));
+    });
+    else lane.append(h('div', { class: 'lanestart', style: `left:${off * px}px`, dataset: { role: 'lanestart', d }, title: d === 1 ? 'Drag to set the default gap' : 'Drag to move and pin C' }));
+    canvas.append(lane);
+  }
+  const seen = new Set();
+  for (const c of A.conf.clashes) { const k = 'c' + c.s + '-' + c.e; if (seen.has(k)) continue; seen.add(k); canvas.append(h('div', { class: 'band clash', style: `left:${c.s * px}px;width:${Math.max((c.e - c.s) * px, 2)}px` })); }
+  for (const c of A.conf.tights) { const k = 't' + c.s + '-' + c.e; if (seen.has(k)) continue; seen.add(k); canvas.append(h('div', { class: 'band tight', style: `left:${c.s * px}px;width:${Math.max((c.e - c.s) * px, 3)}px` })); }
+  if (p.timeLimitS != null) canvas.append(h('div', { class: 'limit-line', style: `left:${p.timeLimitS * px}px` }, h('span', { text: 'limit ' + fmt(p.timeLimitS) })));
+  canvas.append(h('div', { class: 'playhead', id: 'playhead', style: `left:${ui.playhead * px}px` }));
+  canvas.addEventListener('pointerdown', onTimelineDown);
+  canvas.addEventListener('contextmenu', e => { if (ui.tlMode === 'edit') e.preventDefault(); });
+  return h('div', { class: 'tl-frame', style: `--lanes:${p.drippers}` }, labels, h('div', { class: 'tl-scroll', id: 'tl-scroll' }, canvas));
+}
+
+/* ---------- timeline gestures ---------- */
+let tipEl = null;
+function showTip(x, y, text) { if (!tipEl) { tipEl = h('div', { class: 'tip' }); document.body.append(tipEl); } tipEl.textContent = text; tipEl.style.left = Math.min(x + 14, window.innerWidth - 230) + 'px'; tipEl.style.top = Math.max(8, y - 44) + 'px'; }
+function hideTip() { if (tipEl) { tipEl.remove(); tipEl = null; } }
+/* FR3 snapping: whole seconds; below 6 px/s a release within 1 s of a 5 s mark snaps onto it. */
+function snapT(t, px) { t = Math.max(0, t); const r = Math.round(t); if (px < 6) { const m = Math.round(t / 5) * 5; if (Math.abs(t - m) <= 1) return m; } return r; }
+function secAt(clientX, px) { const c = document.querySelector('.tl-canvas'); return (clientX - c.getBoundingClientRect().left) / px; }
+function onTimelineDown(e) {
+  if (e.button > 0) return;
+  const canvas = e.currentTarget, px = +canvas.dataset.px;
+  const el = e.target.closest('[data-role]'), role = el ? el.dataset.role : null;
+  const laneEl = e.target.closest('.lane'), d = laneEl ? +laneEl.dataset.d : null;
+  const x0 = e.clientX, y0 = e.clientY, touch = e.pointerType !== 'mouse';
+  const editing = ui.tlMode === 'edit' && !ui.playing;
+  let moved = false, timer = null, active = null;
+  const end = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', cancel); clearTimeout(timer); hideTip(); };
+  const cancel = () => { end(); if (active && active.cancel) active.cancel(); ui.drag = null; render(); };
+  const mv = ev => {
+    if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 6) { moved = true; clearTimeout(timer); if (!active && editing && role === 'body' && d === 0) active = beginReorder(el.dataset.id, px); }
+    if (active && active.move) { ev.preventDefault(); active.move(ev); }
+  };
+  const up = ev => {
+    end();
+    if (active && active.up) { active.up(ev); return; }
+    if (moved) return;
+    if (!editing) { seek(snapT(secAt(ev.clientX, px), px)); return; }
+    if (role === 'switch' && d === 0) { ui.selectedId = el.dataset.id; ui.selectedLane = 0; flipSwitch(el.dataset.id); return; }
+    if (role === 'body' || role === 'switch') { selectStep(el.dataset.id, d); return; }
+  };
+  window.addEventListener('pointermove', mv, { passive: false }); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', cancel);
+  if (!editing) { if (!touch) { seek(snapT(secAt(x0, px), px)); active = { move: ev => seek(snapT(secAt(ev.clientX, px), px)), up: () => {} }; } return; }
+  if (role === 'edge') { e.preventDefault(); active = beginEdge(el.dataset.id, px); }
+  else if (role === 'trade') { e.preventDefault(); active = beginTrade(el.dataset.id, px); }
+  else if (role === 'lanestart') { e.preventDefault(); active = beginLaneStart(+el.dataset.d, px); }
+  else if (!el && d === 0) {
+    timer = setTimeout(() => { if (moved) return; const t = clamp(snapT(secAt(x0, px), px), 1, MAX_LEN); end(); openAddMenu({ atS: t, title: `Add a step ending at ${fmt(t)}` }); }, 550);
+  }
+}
+function beginDragState(px) { if (ui.playing) return null; const r = rec(); ui.drag = { px, before: snap(r) }; return r; }
+function finishDrag() {
+  const r = rec(), before = ui.drag && ui.drag.before; ui.drag = null;
+  if (before && snap(r) !== before) { history.past.push(before); history.future = []; r.updatedAt = nowIso(); save(); }
+  render();
+}
+function validAfter(r, i, invalidBefore) {
+  const res = resolve(r); if (res.length > MAX_LEN) return false;
+  for (let j = i + 1; j < res.rows.length; j++) if (res.rows[j].invalid && !invalidBefore[j]) return false;
+  return true;
+}
+/* Edge drag: duration → seconds; until → until time. Clamps at 1 s, the next anchor, and 30:00 (FR7). */
+function beginEdge(id, px) {
+  const r = beginDragState(px); if (!r) return null;
+  const i = stepIndex(r, id), s = r.steps[i], orig = deep(s.timing), res0 = resolve(r), row0 = res0.rows[i];
+  const invalidBefore = res0.rows.map(x => x.invalid);
+  return {
+    move(ev) {
+      const E = snapT(secAt(ev.clientX, px), px);
+      const mk = v => orig.mode === 'duration' ? D(v) : U(v);
+      let v = orig.mode === 'duration' ? clamp(E - row0.start, 1, 600) : clamp(E, row0.start + 1, MAX_LEN);
+      const ov = orig.mode === 'duration' ? orig.seconds : orig.atS;
+      s.timing = mk(v);
+      while (!validAfter(r, i, invalidBefore) && v !== ov) { v += v > ov ? -1 : 1; s.timing = mk(v); }
+      const row = resolve(r).rows[i];
+      showTip(ev.clientX, ev.clientY, `${s.name}: ${fmt(row.start)} → ${fmt(row.end)} · ${row.dur} s`);
+      renderSoon();
+    },
+    up: finishDrag, cancel() { s.timing = orig; },
+  };
+}
+function beginTrade(id, px) {
+  const r = beginDragState(px); if (!r) return null;
+  const i = stepIndex(r, id), a = r.steps[i], b = r.steps[i + 1], a0 = a.timing.seconds, b0 = b.timing.seconds, start = resolve(r).rows[i].start;
+  return {
+    move(ev) {
+      const E = snapT(secAt(ev.clientX, px), px);
+      const na = clamp(E - start, Math.max(1, a0 + b0 - 600), Math.min(600, a0 + b0 - 1));
+      a.timing = D(na); b.timing = D(a0 + b0 - na);
+      showTip(ev.clientX, ev.clientY, `${a.name} ${na} s · ${b.name} ${a0 + b0 - na} s (total ${a0 + b0} s)`);
+      renderSoon();
+    },
+    up: finishDrag, cancel() { a.timing = D(a0); b.timing = D(b0); },
+  };
+}
+function beginLaneStart(d, px) {
+  const r = beginDragState(px); if (!r) return null;
+  const p = r.pipeline, g0 = p.defaultGapS, c0 = p.pinnedStartC; let warned = false;
+  return {
+    move(ev) {
+      const t = snapT(secAt(ev.clientX, px), px);
+      if (d === 1) {
+        const cap = gapCap(p); p.defaultGapS = clamp(t, 0, cap);
+        if (t > cap && p.drippers === 3 && p.pinnedStartC != null && !warned) { warned = true; toast(`C is pinned at ${fmt(p.pinnedStartC)}. Unpin C to go further.`); }
+        showTip(ev.clientX, ev.clientY, `Default gap ${fmt(p.defaultGapS)} (B starts ${fmt(p.defaultGapS)})`);
+      } else {
+        p.pinnedStartC = clamp(t, p.defaultGapS, 1200);
+        showTip(ev.clientX, ev.clientY, `C pinned at ${fmt(p.pinnedStartC)}`);
+      }
+      renderSoon();
+    },
+    up: finishDrag, cancel() { p.defaultGapS = g0; p.pinnedStartC = c0; },
+  };
+}
+function beginReorder(id, px) {
+  const r = beginDragState(px); if (!r) return null;
+  const rows = resolve(r).rows.filter(x => x.step.id !== id);
+  let to = stepIndex(r, id), mark = null;
+  ui.selectedId = id; ui.selectedLane = 0;
+  return {
+    move(ev) {
+      const t = secAt(ev.clientX, px);
+      to = rows.filter(x => (x.start + x.end) / 2 < t).length;
+      const mx = to === 0 ? 0 : rows[to - 1].end;
+      const c = document.querySelector('.tl-canvas');
+      if (!mark || !c.contains(mark)) { mark = h('div', { class: 'drop-mark' }); c.querySelector('.lane.a').append(mark); }
+      mark.style.left = (mx * px - 1) + 'px';
+      c.querySelectorAll(`.lane.a [data-id="${CSS.escape(id)}"]`).forEach(n => n.classList.add('ghost'));
+      showTip(ev.clientX, ev.clientY, `Move to position ${to + 1}`);
+    },
+    up() { ui.drag = null; hideTip(); moveStep(id, to); },
+    cancel() {},
+  };
+}
+function selectStep(id, lane = 0) { ui.selectedId = id; ui.selectedLane = lane; ui.tab = 'step'; render(); scrollToStep(id); }
+function scrollToStep(id) {
+  requestAnimationFrame(() => {
+    const blk = document.querySelector(`.lane[data-d="${ui.selectedLane}"] .blk[data-id="${CSS.escape(id)}"]`), sc = document.getElementById('tl-scroll');
+    if (blk && sc) { const l = blk.offsetLeft, w = blk.offsetWidth; if (l < sc.scrollLeft || l + w > sc.scrollLeft + sc.clientWidth) sc.scrollLeft = Math.max(0, l - 40); }
+    const row = document.getElementById('row-' + id); if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+/* ===================== recipe panel (FR1, FR2, FR9) ===================== */
+function numField(id, label, value, min, max, onset, opts = {}) {
+  return h('label', { class: 'field', for: id }, h('span', { class: 'lbl', text: label }),
+    h('input', { type: 'number', id, min, max, step: 1, value, disabled: opts.disabled, class: 'w-num', onchange: e => {
+      const v = Number(e.target.value);
+      if (!Number.isFinite(v) || v < min || v > max) { toast(`${label} must be ${min}–${max}.`); render(); return; }
+      onset(Math.round(v));
+    } }));
+}
+function renderRecipePanel(r) {
+  const p = r.pipeline, one = p.drippers === 1, res = A.res;
+  const body = h('div', { class: 'body', id: 'recipe-body' });
+  body.append(h('div', { class: 'stats' },
+    h('div', null, h('span', { class: 'lbl', text: 'Total water' }), h('b', { text: A.totalWater + ' g' })),
+    h('div', null, h('span', { class: 'lbl', text: 'Ratio' }), h('b', { text: A.totalWater && r.doseG ? '1:' + (A.totalWater / r.doseG).toFixed(1) : '—' })),
+    h('div', null, h('span', { class: 'lbl', text: 'Recipe length' }), h('b', { text: fmt(res.length) })),
+    h('div', null, h('span', { class: 'lbl', text: 'Session end' }), h('b', { text: fmt(A.end) })),
+    h('div', null, h('span', { class: 'lbl', text: 'Finish spread' }), h('b', { text: fmt(Math.max(...A.starts)) })),
+    h('div', null, h('span', { class: 'lbl', text: 'Steps' }), h('b', { text: res.rows.length + ' / 30' }))));
+  // recipe fields
+  body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: 'Recipe' })));
+  body.append(h('label', { class: 'field', for: 'f-name' }, h('span', { class: 'lbl', text: 'Name' }),
+    h('input', { type: 'text', id: 'f-name', maxlength: 60, value: r.name, onchange: e => { const v = cleanText(e.target.value, 60).trim(); if (!v) { toast('A recipe needs a name.'); render(); return; } edit(x => { x.name = v; }); } })));
+  body.append(h('div', { class: 'grid3' },
+    numField('f-dose', 'Dose (g)', r.doseG, 1, 60, v => edit(x => { x.doseG = v; })),
+    numField('f-temp', 'Water (°C)', r.tempC, 70, 100, v => edit(x => { x.tempC = v; })),
+    h('label', { class: 'field', for: 'f-valve' }, h('span', { class: 'lbl', text: 'Initial valve' }),
+      h('select', { id: 'f-valve', onchange: e => edit(x => { x.initialValve = e.target.value; }) },
+        [['closed', 'Closed (Switch)'], ['open', 'Open (Switch)'], ['none', 'None (plain V60)']].map(([v, t]) => h('option', { value: v, selected: r.initialValve === v }, t))))));
+  body.append(h('div', { class: 'grid2' },
+    h('label', { class: 'field', for: 'f-grind' }, h('span', { class: 'lbl', text: 'Grind' }), h('input', { type: 'text', id: 'f-grind', maxlength: 40, value: r.grind, placeholder: 'optional', onchange: e => edit(x => { x.grind = cleanText(e.target.value, 40); }) })),
+    h('label', { class: 'field', for: 'f-notes' }, h('span', { class: 'lbl', text: 'Notes' }), h('input', { type: 'text', id: 'f-notes', maxlength: 500, value: r.notes, placeholder: 'optional', onchange: e => edit(x => { x.notes = cleanText(e.target.value, 500); }) }))));
+  // pipeline (FR2)
+  body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: 'Pipeline' })));
+  body.append(h('div', { class: 'row' }, h('span', { class: 'lbl', text: 'Drippers' }),
+    h('div', { class: 'seg' }, [1, 2, 3].map(n => h('button', { id: 'drip-' + n, 'aria-pressed': p.drippers === n, onclick: () => setDrippers(n) }, String(n))))));
+  const cap = gapCap(p);
+  const pipe = h('div', { class: 'grid' + (one ? ' disabled-zone' : ''), style: 'display:grid;gap:10px', 'aria-disabled': one });
+  pipe.append(h('div', { class: 'field' }, h('span', { class: 'lbl', text: `Default gap · B starts at ${fmt(p.defaultGapS)}` }),
+    h('div', { class: 'row', style: 'flex-wrap:nowrap' },
+      h('input', { type: 'range', id: 'gap-range', min: 0, max: 600, step: 1, value: p.defaultGapS, disabled: one, oninput: e => { const v = +e.target.value; if (v > cap) { e.target.value = cap; } liveGap(Math.min(v, cap)); }, onchange: () => commitLive() }),
+      h('input', { type: 'number', id: 'gap-num', class: 'w-num', min: 0, max: 600, value: p.defaultGapS, disabled: one, onchange: e => { const v = Math.round(+e.target.value); if (!(v >= 0 && v <= 600)) { toast('Default gap must be 0–600 s.'); render(); return; } setGap(v); } }), h('span', { class: 'note', text: 's' }))));
+  if (p.drippers === 3 && p.pinnedStartC != null) pipe.append(h('div', { class: 'note', text: `C is pinned at ${fmt(p.pinnedStartC)}. Unpin C to go further.` }));
+  if (p.drippers === 3) pipe.append(h('div', { class: 'row' }, h('span', { class: 'lbl', text: `C starts at ${fmt(A.starts[2])}` }),
+    p.pinnedStartC != null ? h('span', { class: 'pill neutral', text: '📌 pinned' }) : h('span', { class: 'note', text: 'follows 2 × gap' }),
+    h('input', { type: 'number', id: 'c-num', class: 'w-num', min: 0, max: 1200, value: A.starts[2], title: 'Typing a start pins C', onchange: e => { const v = Math.round(+e.target.value); if (!(v >= 0 && v <= 1200)) { toast('C’s start must be 0–1200 s.'); render(); return; } setPinnedC(v); } }),
+    p.pinnedStartC != null ? h('button', { class: 'btn sm', id: 'unpin', onclick: () => setPinnedC(null) }, 'Follow default gap') : null));
+  pipe.append(h('div', { class: 'grid2' },
+    numField('move', 'Move time (s)', p.moveTimeS, 0, 15, v => edit(x => { x.pipeline.moveTimeS = v; }), { disabled: one }),
+    h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Time limit' }), h('div', { class: 'row', style: 'flex-wrap:nowrap' },
+      h('input', { type: 'checkbox', id: 'limit-on', checked: p.timeLimitS != null, onchange: e => edit(x => { x.pipeline.timeLimitS = e.target.checked ? Math.max(60, Math.ceil(A.end / 30) * 30) : null; }) }),
+      h('input', { type: 'text', id: 'limit-val', class: 'clock', value: p.timeLimitS != null ? fmt(p.timeLimitS) : '', placeholder: 'off', disabled: p.timeLimitS == null, onchange: e => {
+        const v = parseClock(e.target.value); if (v == null || v < 60 || v > 3600) { toast('Time limit must be 1:00–60:00.'); render(); return; } edit(x => { x.pipeline.timeLimitS = v; }); } })))));
+  body.append(pipe);
+  if (one) body.append(h('div', { class: 'note', text: 'Add a second dripper to set a gap.' }));
+  // steps (recipe panel rows)
+  body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: 'Steps · lane A is the reference' })));
+  const list = h('div', { class: 'steps' });
+  const flagsByStep = {}; for (const i of A.rIssues) if (i.stepId) (flagsByStep[i.stepId] = flagsByStep[i.stepId] || []).push(i);
+  res.rows.forEach((row, i) => list.append(stepRow(r, row, i, flagsByStep[row.step.id] || [])));
+  body.append(list);
+  body.append(h('div', { class: 'row' },
+    h('button', { class: 'btn', id: 'add-step', onclick: () => openAddMenu({ index: r.steps.length, title: 'Add a step at the end' }) }, '+ Add step'),
+    h('button', { class: 'btn', id: 'add-at-time', onclick: () => openAddMenu({ atS: Math.min(res.length + 10, MAX_LEN), askTime: true, title: 'Add step at time' }) }, '+ Add step at time')));
+  return body;
+}
+let liveBefore = null;
+function liveGap(v) { const r = rec(); if (!liveBefore) liveBefore = snap(r); r.pipeline.defaultGapS = v; const n = document.getElementById('gap-num'); if (n) n.value = v; reuseRecipe = true; renderSoon(); }
+function commitLive() { const r = rec(); if (liveBefore && liveBefore !== snap(r)) { history.past.push(liveBefore); history.future = []; r.updatedAt = nowIso(); save(); } liveBefore = null; render(); }
+function timingInput(s, id) {
+  const isD = s.timing.mode === 'duration';
+  return h('input', { type: 'text', id, class: 'clock defining', inputmode: isD ? 'numeric' : 'text', value: isD ? String(s.timing.seconds) : fmt(s.timing.atS), title: isD ? 'Duration in seconds (1–600)' : 'Until time on the recipe clock (m:ss)', onchange: e => setTimingValue(s.id, e.target.value) });
+}
+function modeSelect(s, id) {
+  return h('select', { id, title: 'Timing mode', onchange: e => setTimingMode(s.id, e.target.value) }, h('option', { value: 'duration', selected: s.timing.mode === 'duration' }, 'for'), h('option', { value: 'until', selected: s.timing.mode === 'until' }, 'until'));
+}
+function stepRow(r, row, i, flags) {
+  const s = row.step, sel = ui.selectedId === s.id;
+  const prevW = lastWeightBefore(r, i);
+  const el = h('div', { class: 'srow' + (sel ? ' sel' : ''), id: 'row-' + s.id, onclick: e => { if (e.target.closest('input,select,button')) return; selectStep(s.id, 0); } },
+    h('span', { class: 'idx', text: i + 1 }),
+    h('div', { class: 'main' },
+      h('span', { class: 'chip ' + s.category, text: CAT_LABEL[s.category] }),
+      h('input', { type: 'text', id: 'nm-' + s.id, maxlength: 40, value: s.name, 'aria-label': 'Step name', onchange: e => setStepField(s.id, 'name', cleanText(e.target.value, 40) || s.name) }),
+      modeSelect(s, 'md-' + s.id), timingInput(s, 'tv-' + s.id), s.timing.mode === 'duration' ? h('span', { class: 'note', text: 's' }) : null,
+      s.category === 'pour' || s.category === 'custom' ? h('span', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' }, h('span', { class: 'note', text: 'to' }),
+        h('input', { type: 'number', id: 'pw-' + s.id, class: 'w-num', min: 0, max: 2000, value: s.pourToG ?? '', placeholder: 'g', 'aria-label': 'Pour-to weight (g)', onchange: e => { const v = e.target.value === '' ? null : Math.round(+e.target.value); if (v != null && !(v >= 0 && v <= 2000)) { toast('Pour-to weight must be 0–2000 g.'); render(); return; } setStepField(s.id, 'pourToG', v); } }), h('span', { class: 'note', text: 'g' })) : null,
+      s.isSwitch ? h('button', { class: 'btn sm', id: 'sw-' + s.id, onclick: () => flipSwitch(s.id), title: 'Flip direction' }, (s.switchDirection === 'open' ? '◐ open' : '● close')) : null),
+    h('div', { class: 'ctl' },
+      h('button', { class: 'btn sm icon', disabled: i === 0, 'aria-label': 'Move up', onclick: () => moveStep(s.id, i - 1) }, '↑'),
+      h('button', { class: 'btn sm icon', disabled: i === r.steps.length - 1, 'aria-label': 'Move down', onclick: () => moveStep(s.id, i + 1) }, '↓')),
+    h('div', { class: 'times' },
+      h('span', { text: `${fmt(row.start)} → ${fmt(row.end)} · ${row.dur} s` }),
+      s.category === 'pour' && s.pourToG > 0 ? h('span', { text: `+${s.pourToG - prevW} g → ${s.pourToG} g · ${((s.pourToG - prevW) / row.dur).toFixed(1)} g/s` }) : null,
+      row.handsOn ? h('span', { text: 'hands-on' }) : h('span', { text: 'waiting' }),
+      r.initialValve !== 'none' ? h('span', { text: 'valve ' + row.valve }) : null,
+      flags.map(f => h('span', { class: f.sev === 'error' ? 'flag' : 'wflag', text: (f.sev === 'error' ? '⚠ ' : '△ ') + f.title }))));
+  return el;
+}
+
+/* ===================== inspector (FR7) ===================== */
+function renderInspector(r) {
+  const body = h('div', { class: 'body' });
+  const i = stepIndex(r, ui.selectedId);
+  if (i < 0) { body.append(h('p', { class: 'note', text: 'Select a step on the timeline or in the recipe panel to inspect it. In Edit mode, long-press lane A to add a step ending at that time.' })); return body; }
+  const row = A.res.rows[i], s = row.step, lane = ui.selectedLane, ro = lane !== 0, off = A.starts[lane] || 0;
+  const preset = S.presets.find(p => p.id === s.presetId);
+  body.append(h('div', { class: 'row' }, h('span', { class: 'chip ' + s.category, text: CAT_LABEL[s.category] }), h('h2', { text: s.name }),
+    h('span', { class: 'note', text: preset ? 'from preset “' + preset.name + '”' : s.presetId ? 'from a deleted preset' : 'blank step' }),
+    ro ? h('span', { class: 'pill neutral', text: 'Dripper ' + LETTERS[lane] + ' · read-only' }) : null));
+  body.append(h('dl', { class: 'kv' },
+    h('dt', { text: 'Recipe clock' }), h('dd', { text: `${fmt(row.start)} → ${fmt(row.end)} · ${row.dur} s` }),
+    h('dt', { text: 'Session clock' }), h('dd', { text: `${LETTERS[lane]} ${fmt(off + row.start)} → ${fmt(off + row.end)}` }),
+    h('dt', { text: 'Hands-on' }), h('dd', { text: row.handsOn ? 'yes' : 'no (waiting)' }),
+    r.initialValve !== 'none' ? [h('dt', { text: 'Valve' }), h('dd', { text: row.valve + (s.isSwitch ? ' → ' + row.valveAfter : '') })] : null));
+  for (const f of A.rIssues.filter(x => x.stepId === s.id)) body.append(h('div', { class: 'notice' + (f.sev === 'error' ? ' err' : '') }, h('span', { text: f.title + ': ' + f.detail })));
+  if (ro) { body.append(h('button', { class: 'btn primary', onclick: () => selectStep(s.id, 0) }, 'Edit on A')); return body; }
+  body.append(h('label', { class: 'field', for: 'in-name' }, h('span', { class: 'lbl', text: 'Name' }), h('input', { type: 'text', id: 'in-name', maxlength: 40, value: s.name, onchange: e => setStepField(s.id, 'name', cleanText(e.target.value, 40) || s.name) })));
+  body.append(h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Timing' }), h('div', { class: 'row' }, modeSelect(s, 'in-mode'),
+    h('button', { class: 'btn sm icon', id: 'in-minus', onclick: () => nudgeTiming(s.id, -1), 'aria-label': 'Minus one second' }, '−1'),
+    timingInput(s, 'in-val'),
+    h('button', { class: 'btn sm icon', id: 'in-plus', onclick: () => nudgeTiming(s.id, 1), 'aria-label': 'Plus one second' }, '+1'),
+    h('span', { class: 'note', text: s.timing.mode === 'duration' ? 'seconds' : 'until (recipe clock)' }))));
+  if (s.category === 'pour' || s.category === 'custom') body.append(h('label', { class: 'field', for: 'in-weight' }, h('span', { class: 'lbl', text: 'Pour-to weight (g)' + (s.category === 'custom' ? ' · optional' : '') }),
+    h('input', { type: 'number', id: 'in-weight', class: 'w-num', min: 0, max: 2000, value: s.pourToG ?? '', onchange: e => setStepField(s.id, 'pourToG', e.target.value === '' ? null : Math.round(+e.target.value)) })));
+  if (s.isSwitch) body.append(h('div', { class: 'row' }, h('span', { class: 'lbl', text: 'Direction' }), h('div', { class: 'seg' }, ['open', 'close'].map(dv => h('button', { 'aria-pressed': s.switchDirection === dv, onclick: () => { if (s.switchDirection !== dv) flipSwitch(s.id); } }, dv)))));
+  if (s.category === 'custom') body.append(h('label', { class: 'row', for: 'in-hands' }, h('input', { type: 'checkbox', id: 'in-hands', checked: !!s.handsOn, onchange: e => setStepField(s.id, 'handsOn', e.target.checked) }), h('span', { text: 'Hands-on (blocks other drippers)' })));
+  const del = ui.confirm.step === s.id;
+  body.append(h('div', { class: 'row' },
+    h('button', { class: 'btn danger' + (del ? ' armed' : ''), id: 'in-delete', onclick: () => { if (del) { ui.confirm = {}; deleteStep(s.id); } else { ui.confirm = { step: s.id }; render(); setTimeout(() => { if (ui.confirm.step === s.id) { ui.confirm = {}; render(); } }, 3000); } } }, del ? 'Tap again to delete' : 'Delete'),
+    h('button', { class: 'btn', onclick: () => duplicateStep(s.id) }, 'Duplicate'),
+    h('button', { class: 'btn', onclick: () => openAddMenu({ index: i, title: 'Insert before ' + s.name }) }, 'Insert before'),
+    h('button', { class: 'btn', onclick: () => openAddMenu({ index: i + 1, title: 'Insert after ' + s.name }) }, 'Insert after')));
+  body.append(h('div', { class: 'row' },
+    h('button', { class: 'btn', disabled: !preset, onclick: () => resetToPreset(s.id), title: preset ? '' : 'That preset was deleted' }, 'Reset to preset'),
+    preset ? h('button', { class: 'btn', onclick: () => saveAsPreset(s.id, true) }, 'Update preset “' + preset.name + '”') : null,
+    !s.isSwitch ? h('button', { class: 'btn', onclick: () => saveAsPreset(s.id, false) }, 'Save as new preset') : null));
+  return body;
+}
+
+/* ===================== tabs ===================== */
+function renderTabs(r, wide) {
+  const tabs = [
+    !wide ? ['recipe', 'Recipe'] : null, ['step', 'Step'], ['issues', 'Issues', A.all.length], ['gap', 'Gap'], ['preview', 'Preview'], ['presets', 'Presets'], ['library', 'Library'],
+  ].filter(Boolean);
+  const bodies = { recipe: () => recipeBody(r), step: () => renderInspector(r), issues: () => renderIssues(r), gap: () => renderGap(r), preview: () => renderPreview(r), presets: () => renderPresets(), library: () => renderLibrary() };
+  return h('div', { class: 'panel' },
+    h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([k, t, n]) => h('button', { role: 'tab', id: 'tab-' + k, dataset: { tab: k }, 'aria-selected': ui.tab === k, onclick: () => { ui.tab = k; render(); } }, t, n ? h('span', { class: 'count', text: '(' + n + ')' }) : null))),
+    bodies[ui.tab] ? bodies[ui.tab]() : null);
+}
+
+/* ===================== issues (FR4) ===================== */
+function renderIssues(r) {
+  const body = h('div', { class: 'body' });
+  body.append(h('div', { class: 'row' }, statusPill(A), h('span', { class: 'note', text: A.barReady ? 'No errors. Warnings don’t block the bar.' : 'Errors must be fixed for Bar-ready.' })));
+  const group = (title, list, empty) => {
+    body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: title })));
+    if (!list.length) { body.append(h('p', { class: 'note', style: 'margin:0', text: empty })); return; }
+    body.append(h('div', { class: 'issues' }, list.map(i => h('button', { class: 'issue ' + (i.sev === 'error' ? 'err' : 'warn'), onclick: () => { if (i.stepId) selectStep(i.stepId, 0); else { seek(i.t); scrollToTime(i.t); } } },
+      h('span', { class: 'pill ' + (i.sev === 'error' ? 'err' : 'warn'), text: i.sev === 'error' ? 'Error' : 'Warning' }),
+      h('span', null, h('b', { text: i.title }), h('small', { text: i.detail }))))));
+  };
+  group('Recipe issues', A.rIssues, 'None. Listed once: every dripper runs this recipe.');
+  group('Pipeline issues', A.pIssues, r.pipeline.drippers === 1 ? 'One dripper: nothing to clash with.' : 'No clashes or tight spots.');
+  return body;
+}
+function scrollToTime(t) { requestAnimationFrame(() => { const c = document.querySelector('.tl-canvas'), sc = document.getElementById('tl-scroll'); if (c && sc) sc.scrollLeft = Math.max(0, t * +c.dataset.px - sc.clientWidth / 3); }); }
+
+/* ===================== gap guidance (FR6) ===================== */
+function renderGap(r) {
+  const p = r.pipeline, body = h('div', { class: 'body' });
+  if (p.drippers === 1) { body.append(h('p', { class: 'note', text: 'Add a second dripper to set a gap.' })); body.classList.add('disabled-zone'); }
+  const cols = staggerColumns(r, A.res); A.cols = cols;
+  const g = gapGuidance(r, A.res, cols), pinned = p.drippers === 3 && p.pinnedStartC != null;
+  const best = p.timeLimitS != null ? g.firstClearInLimit : g.firstClear;
+  const lines = h('div', { class: 'grid', style: 'display:grid;gap:8px' });
+  if (g.firstClear) lines.append(h('div', { class: 'row' }, h('span', { class: 'lbl', text: 'Smallest clash-free gap' }), h('b', { class: 'mono', text: fmt(g.firstClear.g) }),
+    h('button', { class: 'btn sm primary', id: 'use-gap', disabled: p.defaultGapS === g.firstClear.g, onclick: () => setGap(g.firstClear.g) }, 'Use it')));
+  else lines.append(h('div', { class: 'notice err' }, h('span', { text: pinned ? `None while C is pinned at ${fmt(p.pinnedStartC)}. Unpin C to search further.` : 'No clash-free gap exists for this recipe.' })));
+  if (p.timeLimitS != null) lines.append(best ? h('div', { class: 'row' }, h('span', { class: 'lbl', text: `Clash-free and within ${fmt(p.timeLimitS)}` }), h('b', { class: 'mono', text: fmt(best.g) }), h('button', { class: 'btn sm', id: 'use-gap-limit', disabled: p.defaultGapS === best.g, onclick: () => setGap(best.g) }, 'Use it'))
+    : h('div', { class: 'notice err' }, h('span', { text: `No clash-free gap ends within the ${fmt(p.timeLimitS)} limit.` })));
+  body.append(lines);
+  body.append(h('div', { class: 'field' }, h('span', { class: 'lbl', text: `Stagger map · default gap 0:00 – ${fmt(cols.length - 1)} · current ${fmt(p.defaultGapS)}` }),
+    h('div', { class: 'stagger-wrap' }, h('canvas', { class: 'stagger', id: 'stagger', role: 'img', 'aria-label': 'Stagger map: clash status for each default gap', onclick: onStaggerClick })),
+    h('div', { class: 'legend' }, h('span', null, h('i', { class: 'sw-clear' }), 'clear'), h('span', null, h('i', { class: 'sw-tight' }), 'tight spot'), h('span', null, h('i', { class: 'sw-clash' }), 'clash'),
+      p.timeLimitS != null ? h('span', null, h('i', { class: 'sw-over' }), 'clear but over time limit') : null, h('span', null, h('i', { class: 'sw-off' }), 'can’t be chosen'))));
+  body.append(h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Clash-free ranges' }),
+    h('p', { class: 'mono', style: 'margin:0;font-size:12.5px', text: g.ranges.length ? g.ranges.map(([a, b]) => a === b ? fmt(a) : fmt(a) + '–' + fmt(b)).join(', ') : 'none' })));
+  body.append(h('p', { class: 'note', style: 'margin:0', text: `At or above ${fmt(A.res.length + p.moveTimeS)} (recipe length + move time) A and B can’t overlap.` + (pinned ? ` Columns past C’s pinned start (${fmt(p.pinnedStartC)}) are greyed out.` : '') }));
+  return body;
+}
+function tokens() { const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim(); return { ok: g('--ok'), warn: g('--warn'), err: g('--err'), off: g('--line'), surface: g('--surface'), accent: g('--accent'), fg: g('--fg'), pour: g('--pour'), op: g('--op'), wait: g('--wait'), line: g('--line-strong') }; }
+function drawStagger() {
+  const c = document.getElementById('stagger'); if (!c || !A.cols) return;
+  const cols = A.cols, dpr = window.devicePixelRatio || 1, w = c.clientWidth, hgt = c.clientHeight;
+  c.width = Math.round(w * dpr); c.height = Math.round(hgt * dpr);
+  const ctx = c.getContext('2d'); ctx.scale(dpr, dpr);
+  const T = tokens(), cw = w / cols.length;
+  cols.forEach((col, i) => {
+    const x = i * cw, ww = Math.max(cw, 0.6);
+    ctx.fillStyle = col.blocked ? T.off : col.status === 2 ? T.err : col.status === 1 ? T.warn : T.ok;
+    ctx.fillRect(x, 8, ww + .3, hgt - 16);
+    if (!col.blocked && col.status === 0 && col.over) { ctx.fillStyle = T.surface; for (let y = 8; y < hgt - 8; y += 4) ctx.fillRect(x, y, ww + .3, 2); }
+  });
+  const p = rec().pipeline;
+  ctx.fillStyle = T.fg; ctx.fillRect(p.defaultGapS * cw + cw / 2 - 1, 0, 2, hgt);
+  ctx.beginPath(); ctx.moveTo(p.defaultGapS * cw + cw / 2 - 5, 0); ctx.lineTo(p.defaultGapS * cw + cw / 2 + 5, 0); ctx.lineTo(p.defaultGapS * cw + cw / 2, 6); ctx.fill();
+}
+function onStaggerClick(e) {
+  const r = rec(); if (r.pipeline.drippers === 1 || !A.cols) return;
+  const rect = e.currentTarget.getBoundingClientRect(), i = clamp(Math.floor((e.clientX - rect.left) / rect.width * A.cols.length), 0, A.cols.length - 1);
+  const col = A.cols[i];
+  if (col.blocked) { toast(col.g > 600 ? 'The default gap can’t exceed 10:00.' : `C is pinned at ${fmt(r.pipeline.pinnedStartC)}. Unpin C to go further.`); return; }
+  setGap(col.g);
+}
+
+/* ===================== preview playback (FR5) & shared live state ===================== */
+function liveState(t, a) {
+  const rows = a.res.rows, events = [];
+  a.starts.forEach((off, d) => rows.forEach(row => { if (row.handsOn) events.push({ d, row, s: off + row.start, e: off + row.end }); }));
+  events.sort((x, y) => x.s - y.s || x.d - y.d);
+  const drippers = a.starts.map((off, d) => {
+    const local = t - off;
+    if (local < 0) return { d, state: 'pending', in: -local };
+    if (local >= a.res.length) return { d, state: 'done', finishedAt: off + a.res.length };
+    const row = rows.find(x => local >= x.start && local < x.end);
+    return { d, state: 'running', row, local, left: row.end - local };
+  });
+  const now = events.filter(ev => t >= ev.s && t < ev.e);
+  const next = events.find(ev => ev.s > t && !now.includes(ev));
+  return { events, drippers, now, next, cuePre: !!(next && next.s - t <= 3) };
+}
+function actionText(row) { const s = row.step; return s.name + (s.isSwitch ? ' · ' + s.switchDirection : '') + (s.pourToG && (s.category === 'pour' || s.category === 'custom') ? ' → ' + s.pourToG + ' g' : ''); }
+function renderLivePanels(t, a, opts = {}) {
+  const L = liveState(t, a), clash = L.now.length > 1;
+  const doNow = h('div', { class: 'donow' + (L.now.length ? ' active' : '') + (clash ? ' clash' : ''), id: 'donow' },
+    h('span', { class: 'lbl', text: clash ? 'Do now · clash' : 'Do now' }),
+    L.now.length ? L.now.map(ev => h('div', { class: 'big', text: `${LETTERS[ev.d]} · ${actionText(ev.row)}` })) : h('div', { class: 'big', style: 'opacity:.55', text: 'Nothing hands-on' }),
+    L.now.length ? h('span', { class: 'mono', text: L.now.map(ev => `${fmt(ev.e - t)} left`).join(' · ') }) : null);
+  const next = h('div', { class: 'next' + (L.cuePre ? ' cue' : ''), id: 'next' },
+    h('span', { class: 'lbl', text: 'Next' }),
+    L.next ? [h('div', { class: 'big', text: `${LETTERS[L.next.d]} · ${actionText(L.next.row)}` }), h('span', { class: 'mono', text: 'in ' + fmt(Math.ceil(L.next.s - t)) + ` · at ${fmt(L.next.s)} (${LETTERS[L.next.d]} ${fmt(L.next.row.start)})` })] : h('div', { class: 'big', style: 'opacity:.55', text: 'No more actions' }));
+  const cards = h('div', { class: 'cards' }, L.drippers.map(x => {
+    const v = x.row && rec().initialValve !== 'none' ? 'valve ' + x.row.valve : '';
+    return h('div', { class: 'dcard' + (x.row && x.row.handsOn ? ' hands' : '') },
+      h('div', { class: 'top' }, h('b', { class: 'l', text: LETTERS[x.d] }), h('span', { class: 'mono note', text: x.state === 'running' ? 'recipe ' + fmt(x.local) : '' })),
+      x.state === 'pending' ? h('span', { text: 'Starts in ' + fmt(Math.ceil(x.in)) }) : x.state === 'done' ? h('span', { text: 'Finished at ' + fmt(x.finishedAt) }) :
+        [h('b', { text: actionText(x.row) }), h('span', { class: 'note', text: (x.row.handsOn ? 'hands-on' : 'waiting') + (v ? ' · ' + v : '') + ' · ' + fmt(x.left) + ' left' })]);
+  }));
+  const wrap = h('div', { id: 'live', style: 'display:grid;gap:10px' }, h('div', { class: 'now-grid' }, doNow, next), cards);
+  if (opts.sheet) wrap.append(h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Action sheet · every hands-on step in session order' }),
+    h('div', { class: 'sheet', id: 'sheet' }, L.events.map(ev => h('button', { class: (ev.e <= t ? 'past' : '') + (t >= ev.s && t < ev.e ? ' cur' : ''), onclick: () => seek(ev.s) },
+      h('span', { class: 'mono', text: fmt(ev.s) }), h('b', { class: 'mono', text: LETTERS[ev.d] }), h('span', { text: actionText(ev.row) }), h('span', { class: 'mono note', text: LETTERS[ev.d] + ' ' + fmt(ev.row.start) }))))));
+  return { el: wrap, L };
+}
+function renderPreview(r) {
+  const body = h('div', { class: 'body' });
+  body.append(h('div', { class: 'row' },
+    h('button', { class: 'btn primary', id: 'pv-play', onclick: togglePreview }, ui.playing ? '❚❚ Pause' : '▶ Play'),
+    h('div', { class: 'seg' }, [1, 4, 10].map(s => h('button', { 'aria-pressed': ui.speed === s, onclick: () => setSpeed(s) }, s + '×'))),
+    h('label', { class: 'row', for: 'pv-sound' }, h('input', { type: 'checkbox', id: 'pv-sound', checked: S.deviceSettings.sound, onchange: e => { S.deviceSettings.sound = e.target.checked; save(); } }), h('span', { text: 'Cue sounds' })),
+    h('span', { class: 'note', text: ui.playing ? 'Editing is off while preview plays.' : 'Scrub the timeline to move the playhead.' })));
+  body.append(h('div', { id: 'preview-live' }, renderLivePanels(ui.playhead, A, { sheet: true }).el));
+  return body;
+}
+let actx = null, wakeLock = null, pv = null;
+function ensureAudio() { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) { actx = null; } }
+function beep(freq = 880, dur = 0.12, delay = 0) {
+  if (!S.deviceSettings.sound || !actx) return;
+  try { const t0 = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain(); o.type = 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.35, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(actx.destination); o.start(t0); o.stop(t0 + dur + 0.03); } catch (e) {}
+}
+async function requestWake() { try { if (!('wakeLock' in navigator)) return false; wakeLock = await navigator.wakeLock.request('screen'); return true; } catch (e) { wakeLock = null; return false; } }
+function releaseWake() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+/* Cue rules (FR5/FR12): one beep 3 s before each hands-on step, a double beep when it starts; Op gets a lower tone. Missed cues (jumps > 1.5 s) are not replayed. */
+function processCues(prevT, t, events) {
+  if (t - prevT > 1.5 || t < prevT) return;
+  for (const ev of events) {
+    const tone = ev.row.step.category === 'op' ? 660 : 880;
+    if (prevT < ev.s - 3 && t >= ev.s - 3) beep(tone, 0.12);
+    if (prevT < ev.s && t >= ev.s) { beep(tone, 0.1); beep(tone, 0.1, 0.16); }
+  }
+}
+function togglePreview() { ui.playing ? stopPreview() : startPreview(); render(); }
+function startPreview() {
+  ensureAudio(); requestWake();
+  if (ui.playhead >= A.end) ui.playhead = 0;
+  ui.playing = true; ui.selectedId = ui.selectedId; pv = { t0: ui.playhead, at: performance.now(), prev: ui.playhead };
+  if (ui.tab !== 'preview') ui.tab = 'preview';
+  requestAnimationFrame(previewFrame);
+}
+function stopPreview() { ui.playing = false; pv = null; releaseWake(); document.body.classList.remove('cue-pre'); }
+function setSpeed(s) { if (ui.playing && pv) { pv.t0 = ui.playhead; pv.at = performance.now(); } ui.speed = s; render(); }
+function seek(t) {
+  ui.playhead = clamp(t, 0, A ? A.end : t);
+  if (ui.playing && pv) { pv.t0 = ui.playhead; pv.at = performance.now(); pv.prev = ui.playhead; updateLive(); } else render();
+}
+function previewFrame() {
+  if (!ui.playing || !pv) return;
+  let t = pv.t0 + (performance.now() - pv.at) / 1000 * ui.speed;
+  if (t >= A.end) { t = A.end; ui.playhead = t; stopPreview(); render(); return; }
+  const L = liveState(t, A);
+  if (ui.speed === 1) processCues(pv.prev, t, L.events);
+  pv.prev = t; ui.playhead = t; updateLive();
+  requestAnimationFrame(previewFrame);
+}
+function updateLive() {
+  const c = document.querySelector('.tl-canvas'), ph = document.getElementById('playhead');
+  if (c && ph) ph.style.left = (ui.playhead * +c.dataset.px) + 'px';
+  const clock = document.getElementById('tl-clock'); if (clock) clock.firstChild.textContent = fmt(ui.playhead);
+  const host = document.getElementById('preview-live');
+  if (host) { const { el, L } = renderLivePanels(ui.playhead, A, { sheet: true }); const sh = document.getElementById('sheet'), st = sh ? sh.scrollTop : 0; host.replaceChildren(el); const sh2 = document.getElementById('sheet'); if (sh2) sh2.scrollTop = st; document.body.classList.toggle('cue-pre', ui.playing && L.cuePre); }
+  if (ui.playing && c) { const sc = document.getElementById('tl-scroll'), x = ui.playhead * +c.dataset.px; if (x > sc.scrollLeft + sc.clientWidth * .8 || x < sc.scrollLeft) sc.scrollLeft = x - sc.clientWidth * .3; }
+}
+
+/* ===================== add menu ===================== */
+function openAddMenu(where) { if (ui.playing) { toast('Pause the preview to edit.'); return; } ui.modal = { type: 'add', ...where }; render(); }
+function renderAddMenu(m) {
+  const r = rec();
+  const timeVal = m.atS != null ? fmt(m.atS) : '';
+  const getWhere = () => {
+    const raw = (document.getElementById('add-until') || {}).value || '';
+    if (raw.trim()) { const v = parseClock(raw); if (v == null || v < 1 || v > MAX_LEN) { toast('Enter an until time between 0:01 and 30:00.'); return null; } return { atS: v }; }
+    return { index: m.index ?? r.steps.length };
+  };
+  const pick = make => { const w = getWhere(); if (!w) return; ui.modal = null; insertStep(make, w); };
+  const groups = CATS.map(cat => {
+    const ps = S.presets.filter(p => p.category === cat && !(p.isSwitch && r.initialValve === 'none'));
+    return h('div', { class: 'field' }, h('span', { class: 'lbl', text: CAT_LABEL[cat] + (cat === 'wait' ? ' · waiting' : cat === 'custom' ? ' · you set hands-on' : ' · hands-on') }),
+      h('div', { class: 'addgrid' },
+        ps.map(p => h('button', { dataset: { preset: p.id }, onclick: () => pick((rr, idx) => stepFromPreset(rr, p, idx)) }, h('b', { text: p.name }),
+          h('small', { text: (p.timing.mode === 'duration' ? 'for ' + p.timing.seconds + ' s' : 'until ' + fmt(p.timing.atS)) + (p.addG ? ' · +' + p.addG + ' g' : '') + (p.isSwitch ? ' · direction set on insert' : '') }))),
+        h('button', { dataset: { blank: cat }, onclick: () => pick((rr, idx) => blankStep(rr, cat, idx)) }, h('b', { text: 'Blank ' + CAT_LABEL[cat].toLowerCase() }), h('small', { text: 'empty step' }))));
+  });
+  return [h('header', null, h('h2', { text: m.title || 'Add step' }), h('span', { class: 'spacer' }), h('button', { class: 'btn icon ghost', 'aria-label': 'Close', onclick: () => { ui.modal = null; render(); } }, '✕')),
+    h('div', { class: 'body' },
+      h('label', { class: 'field', for: 'add-until' }, h('span', { class: 'lbl', text: 'Until (optional) · the new step ends at this recipe-clock time' }),
+        h('div', { class: 'row' }, h('input', { type: 'text', id: 'add-until', class: 'clock', placeholder: 'm:ss', value: timeVal }), h('span', { class: 'note', text: 'Leave empty to insert with the preset’s own timing at the chosen position.' }))),
+      r.initialValve === 'none' ? h('p', { class: 'note', style: 'margin:0', text: 'Switch isn’t offered: this recipe has no valve (plain V60).' }) : null,
+      groups)];
+}
+
+/* ===================== preset library (FR10) ===================== */
+function presetTimingText(p) { return p.timing.mode === 'duration' ? 'for ' + p.timing.seconds + ' s' : 'until ' + fmt(p.timing.atS); }
+function updatePreset(id, fn) { const p = S.presets.find(x => x.id === id); if (!p) return; fn(p); save(); render(); }
+function armed(key, id) { return ui.confirm[key] === id; }
+function arm(key, id) { ui.confirm = { [key]: id }; render(); setTimeout(() => { if (ui.confirm[key] === id) { ui.confirm = {}; render(); } }, 3000); }
+function renderPresets() {
+  const body = h('div', { class: 'body' });
+  body.append(h('p', { class: 'note', style: 'margin:0', text: 'Templates for single steps. Inserting copies the values; editing a preset later never changes existing steps. Saved on this device and included in exports.' }));
+  for (const cat of CATS) {
+    const list = S.presets.filter(p => p.category === cat);
+    body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: CAT_LABEL[cat] + ' · ' + (cat === 'custom' ? 'hands-on set per preset' : cat === 'wait' ? 'never hands-on' : 'always hands-on') })));
+    const wrap = h('div', { class: 'plist' });
+    list.forEach((p, i) => {
+      const sys = p.origin === 'system';
+      const timingSel = h('select', { id: 'pm-' + p.id, onchange: e => updatePreset(p.id, x => { x.timing = e.target.value === 'until' ? U(Math.max(1, x.timing.seconds || 30)) : D(clamp(x.timing.atS || 10, 1, 600)); }) },
+        h('option', { value: 'duration', selected: p.timing.mode === 'duration' }, 'for'), h('option', { value: 'until', selected: p.timing.mode === 'until' }, 'until'));
+      const timingVal = h('input', { type: 'text', id: 'pv-' + p.id, class: 'clock', value: p.timing.mode === 'duration' ? p.timing.seconds : fmt(p.timing.atS), onchange: e => {
+        const raw = e.target.value;
+        if (p.timing.mode === 'duration') { const v = parseInt(raw, 10); if (!(v >= 1 && v <= 600)) { toast('Duration must be 1–600 s.'); render(); return; } updatePreset(p.id, x => { x.timing = D(v); }); }
+        else { const v = parseClock(raw); if (v == null || v < 1 || v > MAX_LEN) { toast('Until must be 0:01–30:00.'); render(); return; } updatePreset(p.id, x => { x.timing = U(v); }); } } });
+      wrap.append(h('div', { class: 'prow' },
+        h('div', { class: 'row' },
+          h('input', { type: 'text', id: 'pn-' + p.id, maxlength: 40, value: p.name, style: 'flex:1 1 140px', 'aria-label': 'Preset name', onchange: e => { const v = cleanText(e.target.value, 40).trim(); if (!v) { render(); return; } updatePreset(p.id, x => { x.name = v; }); } }),
+          timingSel, timingVal,
+          cat === 'pour' || cat === 'custom' ? h('span', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' }, h('span', { class: 'note', text: '+' }), h('input', { type: 'number', id: 'pa-' + p.id, class: 'w-num', min: 0, max: 1000, value: p.addG ?? '', placeholder: 'g', 'aria-label': 'Water added (g)', onchange: e => updatePreset(p.id, x => { x.addG = e.target.value === '' ? null : clamp(Math.round(+e.target.value), 0, 1000); }) }), h('span', { class: 'note', text: 'g' })) : null),
+        h('div', { class: 'row' },
+          cat === 'custom' ? h('label', { class: 'row', for: 'ph-' + p.id }, h('input', { type: 'checkbox', id: 'ph-' + p.id, checked: !!p.handsOn, onchange: e => updatePreset(p.id, x => { x.handsOn = e.target.checked; }) }), h('span', { text: 'Hands-on' }))
+            : h('span', { class: 'pill neutral', text: cat === 'wait' ? 'waiting' : 'hands-on' }),
+          h('span', { class: 'note', text: sys ? 'system preset' : p.origin === 'seed' ? 'built-in' : 'yours' }),
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'btn sm icon', disabled: i === 0, 'aria-label': 'Move up', onclick: () => movePreset(p.id, -1) }, '↑'),
+          h('button', { class: 'btn sm icon', disabled: i === list.length - 1, 'aria-label': 'Move down', onclick: () => movePreset(p.id, 1) }, '↓'),
+          !sys ? h('button', { class: 'btn sm', onclick: () => { const c = deep(p); c.id = uid('p'); c.origin = 'user'; c.name = uniqueName(p.name, S.presets.map(x => x.name), 40); S.presets.splice(S.presets.indexOf(p) + 1, 0, c); save(); render(); } }, 'Duplicate') : null,
+          !sys ? h('button', { class: 'btn sm danger' + (armed('preset', p.id) ? ' armed' : ''), onclick: () => { if (armed('preset', p.id)) { ui.confirm = {}; S.presets = S.presets.filter(x => x.id !== p.id); save(); render(); toast(`Deleted preset “${p.name}”.`); } else arm('preset', p.id); } }, armed('preset', p.id) ? 'Tap again' : 'Delete') : null)));
+    });
+    wrap.append(h('div', null, h('button', { class: 'btn sm', onclick: () => { const p = { id: uid('p'), category: cat, name: uniqueName('New ' + CAT_LABEL[cat].toLowerCase(), S.presets.map(x => x.name), 40), timing: D(cat === 'op' ? 3 : 10), addG: cat === 'pour' ? 50 : null, origin: 'user' }; if (cat === 'custom') p.handsOn = true; S.presets.push(p); save(); render(); } }, '+ New ' + CAT_LABEL[cat].toLowerCase() + ' preset')));
+    body.append(wrap);
+  }
+  body.append(h('div', { class: 'row' }, h('button', { class: 'btn', id: 'restore-presets', onclick: restorePresets }, 'Restore built-in presets'), h('span', { class: 'note', text: 'Puts back missing built-ins and resets edited ones. Your own presets are untouched.' })));
+  return body;
+}
+function movePreset(id, dir) {
+  const p = S.presets.find(x => x.id === id), same = S.presets.filter(x => x.category === p.category), j = same.indexOf(p) + dir;
+  if (j < 0 || j >= same.length) return;
+  const a = S.presets.indexOf(p), b = S.presets.indexOf(same[j]); [S.presets[a], S.presets[b]] = [S.presets[b], S.presets[a]]; save(); render();
+}
+function restorePresets() {
+  const seeds = seedPresets(), byId = new Map(seeds.map(p => [p.id, p]));
+  S.presets = S.presets.map(p => byId.has(p.id) ? byId.get(p.id) : p);
+  for (const sp of seeds) if (!S.presets.some(p => p.id === sp.id)) {
+    const at = S.presets.map(p => p.category).lastIndexOf(sp.category);
+    S.presets.splice(at < 0 ? S.presets.length : at + 1, 0, sp);
+  }
+  save(); render(); toast('Built-in presets restored.');
+}
+
+/* ===================== recipe library (FR11) & export/import (FR13) ===================== */
+function hashOf(o) { return JSON.stringify(o); }
+function changesSinceExport() {
+  const snapO = S.exportSnapshot; if (!snapO) return { recipes: S.recipes.length, presets: 0, total: S.lastExportedAt ? S.recipes.length : 0 };
+  let rc = 0, pc = 0;
+  const cmp = (list, map) => { let n = 0; const ids = new Set(); for (const x of list) { ids.add(x.id); if (map[x.id] !== hashOf(x)) n++; } for (const id of Object.keys(map)) if (!ids.has(id)) n++; return n; };
+  rc = cmp(S.recipes, snapO.recipes || {}); pc = cmp(S.presets, snapO.presets || {});
+  return { recipes: rc, presets: pc, total: rc + pc };
+}
+function libRow(r) {
+  const a = analyse(r), open = r.id === S.openRecipeId, renaming = ui.renameId === r.id;
+  return h('div', { class: 'lib-row' + (open ? ' open' : '') },
+    h('div', { style: 'display:grid;gap:4px;min-width:0' },
+      renaming ? h('input', { type: 'text', id: 'rn-' + r.id, maxlength: 60, value: r.name, onchange: e => { const v = cleanText(e.target.value, 60).trim(); ui.renameId = null; if (v) { r.name = v; r.updatedAt = nowIso(); save(); } render(); }, onkeydown: e => { if (e.key === 'Escape') { ui.renameId = null; render(); } } })
+        : h('b', { text: r.name + (open ? ' · open' : '') }),
+      h('div', { class: 'meta' }, h('span', { text: fmt(a.res.length) }), h('span', { text: plural(r.pipeline.drippers, 'dripper') }), r.pipeline.drippers > 1 ? h('span', { text: 'gap ' + fmt(r.pipeline.defaultGapS) }) : null,
+        a.errors ? h('span', { class: 'pill err', text: plural(a.errors, 'error') }) : h('span', { class: 'pill ok', text: 'Bar-ready' }), a.warnings ? h('span', { class: 'pill warn', text: plural(a.warnings, 'warning') }) : null,
+        h('span', { text: 'edited ' + ago(r.updatedAt) }))),
+    h('div', { class: 'acts' },
+      !open ? h('button', { class: 'btn sm primary', onclick: () => openRecipe(r.id) }, 'Open') : null,
+      h('button', { class: 'btn sm', onclick: () => { const c = deep(r); c.id = uid('r'); c.name = uniqueName(cleanText(r.name, 54) + ' copy', S.recipes.map(x => x.name), 60); c.updatedAt = nowIso(); S.recipes.splice(S.recipes.indexOf(r) + 1, 0, c); save(); render(); toast(`Duplicated as “${c.name}”.`); } }, 'Duplicate'),
+      h('button', { class: 'btn sm', onclick: () => { ui.renameId = r.id; render(); const el = document.getElementById('rn-' + r.id); if (el) { el.focus(); el.select(); } } }, 'Rename'),
+      h('button', { class: 'btn sm danger' + (armed('recipe', r.id) ? ' armed' : ''), disabled: S.recipes.length === 1, title: S.recipes.length === 1 ? 'Keep at least one recipe' : '', onclick: () => {
+        if (!armed('recipe', r.id)) { arm('recipe', r.id); return; }
+        ui.confirm = {}; S.recipes = S.recipes.filter(x => x.id !== r.id); if (S.openRecipeId === r.id) openRecipe(S.recipes[0].id); else { save(); render(); } toast(`Deleted “${r.name}”.`);
+      } }, armed('recipe', r.id) ? 'Tap again to delete' : 'Delete')));
+}
+function inFrame() { try { return window.self !== window.top; } catch (e) { return true; } }
+function renderLibrary() {
+  const body = h('div', { class: 'body' });
+  body.append(h('div', { class: 'row' },
+    h('button', { class: 'btn', id: 'new-blank', onclick: () => { const r = newBlankRecipe(); S.recipes.unshift(r); openRecipe(r.id); toast('New recipe started with one Bloom pour.'); } }, '+ New blank'),
+    BUILTINS.map(b => h('button', { class: 'btn', onclick: () => { const r = newRecipeFromBuiltin(b); r.name = uniqueName(b.name, S.recipes.map(x => x.name), 60); S.recipes.unshift(r); openRecipe(r.id); toast(`New recipe from “${b.name}”.`); } }, '+ From ' + b.name))));
+  body.append(h('p', { class: 'note', style: 'margin:0', text: 'Built-in recipes are read-only templates; these buttons make an editable copy. Every edit is saved immediately.' }));
+  body.append(h('div', { style: 'display:grid;gap:6px' }, [...S.recipes].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).map(libRow)));
+  // export
+  const ch = changesSinceExport();
+  body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: 'Backup · export' })));
+  body.append(h('p', { class: 'note', style: 'margin:0', text: `Browser storage can be cleared, and each copy of this page keeps its own. The export file is the backup and the only way to move data between devices. Last export: ${ago(S.lastExportedAt)}.` + (ch.total ? ` ${plural(ch.recipes, 'recipe')} and ${plural(ch.presets, 'preset')} changed since.` : '') }));
+  const canDownload = !inFrame() && 'download' in HTMLAnchorElement.prototype;
+  body.append(h('div', { class: 'row' },
+    h('select', { id: 'exp-scope', onchange: e => { ui.exportScope = e.target.value; } }, [['current', 'Current recipe'], ['recipes', 'All recipes'], ['presets', 'Presets'], ['everything', 'Everything']].map(([v, t]) => h('option', { value: v, selected: ui.exportScope === v }, t))),
+    h('button', { class: 'btn primary', id: 'copy-json', onclick: copyExport }, 'Copy JSON'),
+    canDownload ? h('button', { class: 'btn', id: 'dl-json', onclick: downloadExport }, 'Download .json') : null));
+  body.append(h('textarea', { id: 'export-out', rows: 3, readonly: true, hidden: true, 'aria-label': 'Export JSON' }));
+  // import
+  body.append(h('div', { class: 'subhead' }, h('span', { class: 'lbl', text: 'Import' })));
+  body.append(h('textarea', { id: 'import-text', rows: 4, placeholder: 'Paste exported JSON here (version 2, or a v1 tool export)', value: ui.importText, oninput: e => { ui.importText = e.target.value; } }));
+  body.append(h('div', { class: 'row' },
+    h('input', { type: 'file', id: 'import-file', accept: '.json,application/json', onchange: e => { const f = e.target.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { ui.importText = String(rd.result); render(); }; rd.readAsText(f); } }),
+    h('select', { id: 'imp-scope', onchange: e => { ui.importScope = e.target.value; } }, [['both', 'Recipes and presets'], ['recipes', 'Recipes only'], ['presets', 'Presets only']].map(([v, t]) => h('option', { value: v, selected: ui.importScope === v }, t))),
+    h('button', { class: 'btn primary', id: 'do-import', onclick: () => startImport(ui.importText) }, 'Import'),
+    ui.lastImport ? h('button', { class: 'btn', id: 'undo-import', onclick: undoImport }, 'Undo import') : null));
+  if (ui.importSummary) body.append(h('div', { class: 'notice' }, h('span', { text: ui.importSummary })));
+  return body;
+}
+function exportPayload(scope) {
+  const out = { format: 'parallel-brew-scheduler', version: 2, exportedAt: nowIso() };
+  if (scope === 'current') out.recipes = [deep(rec())];
+  if (scope === 'recipes' || scope === 'everything') out.recipes = deep(S.recipes);
+  if (scope === 'presets' || scope === 'everything') out.presets = deep(S.presets);
+  return out;
+}
+function markExported(scope) {
+  S.lastExportedAt = nowIso();
+  const prev = S.exportSnapshot || { recipes: {}, presets: {} };
+  const rs = scope === 'presets' ? prev.recipes : Object.fromEntries((scope === 'current' ? [rec()] : S.recipes).map(r => [r.id, hashOf(r)]));
+  if (scope === 'current') Object.assign(rs, prev.recipes, { [rec().id]: hashOf(rec()) });
+  const ps = scope === 'presets' || scope === 'everything' ? Object.fromEntries(S.presets.map(p => [p.id, hashOf(p)])) : prev.presets;
+  S.exportSnapshot = { recipes: rs, presets: ps }; save(true);
+}
+async function copyExport() {
+  const scope = ui.exportScope, text = JSON.stringify(exportPayload(scope), null, 1);
+  const ta = document.getElementById('export-out');
+  try { await navigator.clipboard.writeText(text); markExported(scope); render(); toast('Copied. Paste it into a note or file to keep it.'); }
+  catch (e) { ta.hidden = false; ta.value = text; ta.focus(); ta.select(); markExported(scope); toast('Clipboard is blocked here. The JSON is selected below: copy it manually.'); }
+}
+function downloadExport() {
+  const scope = ui.exportScope, blob = new Blob([JSON.stringify(exportPayload(scope), null, 1)], { type: 'application/json' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: `parallel-brew-scheduler-${todayStr()}.json` }); document.body.append(a); a.click(); a.remove();
+  markExported(scope); render();
+}
+
+/* ---------- import: sanitise, migrate, merge by id ---------- */
+const int = (v, min, max, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? clamp(n, min, max) : def; };
+function cleanTiming(t, def) {
+  if (t && t.mode === 'until') return U(int(t.atS, 1, MAX_LEN, 30));
+  if (t && t.mode === 'duration') return D(int(t.seconds, 1, 600, 10));
+  return def;
+}
+function cleanStep(s) {
+  if (!s || !CATS.includes(s.category)) return null;
+  const o = { id: cleanText(s.id || uid('s'), 80) || uid('s'), category: s.category, presetId: s.presetId ? cleanText(s.presetId, 80) : null, name: cleanText(s.name, 40) || CAT_LABEL[s.category], timing: cleanTiming(s.timing, D(10)), pourToG: null };
+  if (s.category === 'pour' || s.category === 'custom') o.pourToG = s.pourToG == null || s.pourToG === '' ? null : int(s.pourToG, 0, 2000, null);
+  if (s.category === 'op' && s.isSwitch) { o.isSwitch = true; o.switchDirection = s.switchDirection === 'close' ? 'close' : 'open'; }
+  if (s.category === 'custom') o.handsOn = !!s.handsOn;
+  return o;
+}
+function cleanRecipe(r, notes) {
+  if (!r || typeof r !== 'object') return null;
+  const steps = (Array.isArray(r.steps) ? r.steps : []).map(cleanStep).filter(Boolean).slice(0, MAX_STEPS);
+  if (!steps.length) return null;
+  const pp = r.pipeline || {};
+  const o = { id: cleanText(r.id || uid('r'), 80) || uid('r'), name: cleanText(r.name, 60).trim() || 'Imported recipe', fromBuiltIn: r.fromBuiltIn ? cleanText(r.fromBuiltIn, 80) : null,
+    doseG: int(r.doseG, 1, 60, 15), tempC: int(r.tempC, 70, 100, 93), grind: cleanText(r.grind, 40), notes: cleanText(r.notes, 500),
+    initialValve: ['open', 'closed', 'none'].includes(r.initialValve) ? r.initialValve : 'none', steps,
+    pipeline: { drippers: [1, 2, 3].includes(pp.drippers) ? pp.drippers : 2, defaultGapS: int(pp.defaultGapS, 0, 600, 60), pinnedStartC: pp.pinnedStartC == null ? null : int(pp.pinnedStartC, 0, 1200, null), moveTimeS: int(pp.moveTimeS, 0, 15, 3), timeLimitS: pp.timeLimitS == null ? null : int(pp.timeLimitS, 60, 3600, null) },
+    updatedAt: typeof r.updatedAt === 'string' && !isNaN(Date.parse(r.updatedAt)) ? new Date(r.updatedAt).toISOString() : nowIso() };
+  if (o.pipeline.pinnedStartC != null && o.pipeline.pinnedStartC < o.pipeline.defaultGapS) { o.pipeline.pinnedStartC = null; notes.push(`“${o.name}”: C was pinned before B, so it now follows the default gap.`); }
+  if (resolve(o).length > MAX_LEN) { notes.push(`“${o.name}” is longer than 30:00 and was skipped.`); return null; }
+  return o;
+}
+function cleanPreset(p) {
+  if (!p || !CATS.includes(p.category)) return null;
+  const o = { id: cleanText(p.id || uid('p'), 80) || uid('p'), category: p.category, name: cleanText(p.name, 40).trim() || CAT_LABEL[p.category], timing: cleanTiming(p.timing, D(10)),
+    addG: (p.category === 'pour' || p.category === 'custom') && p.addG != null ? int(p.addG, 0, 1000, null) : null, origin: ['system', 'seed', 'user'].includes(p.origin) ? p.origin : 'user' };
+  if (p.isSwitch && o.id === 'sys-op-switch') { o.isSwitch = true; o.origin = 'system'; } else if (o.origin === 'system') o.origin = 'user';
+  if (p.category === 'custom') o.handsOn = !!p.handsOn;
+  return o;
+}
+/* v1 migration (FR13). ASSUMPTION: the v1 export shape is inferred from the field names in the requirements
+   (phases with handsOn / pourToG / durationS / valve; staggerS; drippers). Verify against a real v1 file. */
+function migrateV1(obj, notes) {
+  const cands = Array.isArray(obj.recipes) ? obj.recipes : obj.recipe ? [obj.recipe] : [obj];
+  const out = [];
+  for (const v of cands) {
+    const phases = Array.isArray(v.phases) ? v.phases : Array.isArray(v.steps) ? v.steps : null; if (!phases) continue;
+    const steps = phases.slice(0, MAX_STEPS).map(ph => {
+      const name = cleanText(ph.name || ph.label || '', 40);
+      const t = D(int(ph.durationS, 1, 600, 10));
+      if (ph.handsOn && ph.pourToG) return mkStep('pour', name || 'Pour', null, t, int(ph.pourToG, 0, 2000, null));
+      if (ph.handsOn) return mkStep('custom', name || 'Custom step', null, t, null);
+      return mkStep('wait', name || 'Wait', null, t, null);
+    });
+    const valves = phases.map(ph => ph.valve).filter(x => x === 'open' || x === 'closed');
+    const drip = int(v.drippers ?? obj.drippers, 1, 99, 2);
+    if (drip > 3) notes.push(`“${cleanText(v.name, 60) || 'v1 recipe'}” had ${drip} drippers; it now has 3.`);
+    if (new Set(valves).size > 1) notes.push(`“${cleanText(v.name, 60) || 'v1 recipe'}” changes valve state between phases. Add Switch steps where needed; none were added automatically, because that would change the timing.`);
+    out.push(cleanRecipe({ id: uid('r'), name: v.name || 'v1 recipe', doseG: v.doseG ?? v.dose, tempC: v.tempC ?? v.temp, initialValve: valves[0] || (phases[0] && phases[0].valve === 'none' ? 'none' : 'none'), steps,
+      pipeline: { drippers: Math.min(3, drip), defaultGapS: v.staggerS ?? obj.staggerS ?? 60, pinnedStartC: null, moveTimeS: v.moveTimeS ?? obj.moveTimeS ?? 3, timeLimitS: null } }, notes));
+  }
+  return out.filter(Boolean);
+}
+const contentKey = (x, isRecipe) => JSON.stringify(isRecipe ? { ...x, updatedAt: undefined } : x);
+function startImport(text) {
+  ui.importSummary = null;
+  let obj; try { obj = JSON.parse(text); } catch (e) { toast('That isn’t valid JSON. Paste the whole export, including the outer { }.'); return; }
+  const notes = []; let recipes = [], presets = [];
+  if (obj && obj.format === 'parallel-brew-scheduler' && obj.version === 2) {
+    recipes = (Array.isArray(obj.recipes) ? obj.recipes : []).map(r => cleanRecipe(r, notes)).filter(Boolean);
+    presets = (Array.isArray(obj.presets) ? obj.presets : []).map(cleanPreset).filter(Boolean);
+  } else if (obj && obj.version === 1) {
+    recipes = migrateV1(obj, notes).map(r => ({ ...r, id: uid('r') })); // v1 recipes always become new entries
+  } else if (obj && obj.format === 'parallel-brew-scheduler' && Number(obj.version) > 2) { toast('This file was made by a newer version of the tool and can’t be read here.'); return; }
+  else { toast('This file isn’t a Parallel Brew Scheduler export.'); return; }
+  if (ui.importScope === 'presets') recipes = []; if (ui.importScope === 'recipes') presets = [];
+  const plan = { notes, add: [], same: { recipe: 0, preset: 0 }, conflicts: [] };
+  for (const [list, isR] of [[recipes, true], [presets, false]]) for (const x of list) {
+    const pool = isR ? S.recipes : S.presets, ex = pool.find(y => y.id === x.id);
+    if (!ex) plan.add.push({ x, isR });
+    else if (contentKey(ex, isR) === contentKey(x, isR)) plan.same[isR ? 'recipe' : 'preset']++;
+    else plan.conflicts.push({ x, ex, isR, choice: null });
+  }
+  ui.importPlan = plan; ui.applyAll = false;
+  if (plan.conflicts.length) { ui.modal = { type: 'conflict', i: 0 }; render(); } else applyImport();
+}
+function keepBothName(name, pool, max) {
+  const suffix = ` (${todayStr()})`, base = cleanText(name, max - suffix.length - 2);
+  let n = base + suffix; const names = pool.map(x => x.name);
+  for (let k = 2; names.includes(n); k++) n = base + suffix + ' ' + k;
+  return n;
+}
+function resolveConflict(choice) {
+  const plan = ui.importPlan, m = ui.modal;
+  plan.conflicts[m.i].choice = choice;
+  if (ui.applyAll) for (let j = m.i + 1; j < plan.conflicts.length; j++) plan.conflicts[j].choice = choice;
+  const nextI = plan.conflicts.findIndex(c => !c.choice);
+  if (nextI >= 0) { ui.modal = { type: 'conflict', i: nextI }; render(); } else { ui.modal = null; applyImport(); }
+}
+function applyImport() {
+  const plan = ui.importPlan; if (!plan) return;
+  const prev = JSON.stringify({ recipes: S.recipes, presets: S.presets, openRecipeId: S.openRecipeId });
+  const c = { r: { added: 0, replaced: 0, kept: 0 }, p: { added: 0, replaced: 0, kept: 0 } };
+  for (const a of plan.add) { (a.isR ? S.recipes : S.presets).push(a.x); c[a.isR ? 'r' : 'p'].added++; }
+  for (const k of plan.conflicts) {
+    const pool = k.isR ? S.recipes : S.presets, key = k.isR ? 'r' : 'p';
+    if (k.choice === 'replace') { pool[pool.findIndex(y => y.id === k.ex.id)] = k.x; c[key].replaced++; }
+    else { const copy = { ...k.x, id: uid(k.isR ? 'r' : 'p'), name: keepBothName(k.x.name, pool, k.isR ? 60 : 40) }; if (copy.isSwitch) { delete copy.isSwitch; copy.origin = 'user'; } pool.push(copy); c[key].kept++; }
+  }
+  if (!S.recipes.some(r => r.id === S.openRecipeId)) S.openRecipeId = S.recipes[0].id;
+  history = { past: [], future: [] };
+  ui.lastImport = prev; ui.importPlan = null; ui.importText = '';
+  const part = (o, same) => [o.added && o.added + ' added', o.replaced && o.replaced + ' replaced', o.kept && o.kept + ' kept both', same && same + ' unchanged'].filter(Boolean).join(', ') || 'nothing new';
+  ui.importSummary = `Recipes: ${part(c.r, plan.same.recipe)}. Presets: ${part(c.p, plan.same.preset)}.` + (plan.notes.length ? ' ' + plan.notes.join(' ') : '');
+  save(true); render(); toast('Import finished.', { label: 'Undo import', run: undoImport });
+}
+function undoImport() {
+  if (!ui.lastImport) return; const o = JSON.parse(ui.lastImport);
+  S.recipes = o.recipes; S.presets = o.presets; S.openRecipeId = o.openRecipeId; ui.lastImport = null; ui.importSummary = 'Import undone.';
+  history = { past: [], future: [] }; save(true); render();
+}
+function renderConflict(m) {
+  const k = ui.importPlan.conflicts[m.i], total = ui.importPlan.conflicts.length;
+  const cancel = () => { ui.modal = null; ui.importPlan = null; render(); toast('Import cancelled. Nothing was changed.'); };
+  return [h('header', null, h('h2', { text: `Conflict ${m.i + 1} of ${total}` }), h('span', { class: 'spacer' }), h('button', { class: 'btn icon ghost', 'aria-label': 'Cancel import', onclick: cancel }, '✕')),
+    h('div', { class: 'body' },
+      h('p', { style: 'margin:0' }, 'The ', k.isR ? 'recipe ' : 'preset ', h('b', { text: '“' + k.ex.name + '”' }), ' already exists here with different content.'),
+      h('dl', { class: 'kv' }, h('dt', { text: 'On this device' }), h('dd', { text: k.isR ? 'edited ' + new Date(k.ex.updatedAt).toLocaleString() : 'last edit time unknown' }),
+        h('dt', { text: 'In the import' }), h('dd', { text: k.isR ? 'edited ' + new Date(k.x.updatedAt).toLocaleString() : 'last edit time unknown' })),
+      h('label', { class: 'row', for: 'apply-all' }, h('input', { type: 'checkbox', id: 'apply-all', checked: ui.applyAll, onchange: e => { ui.applyAll = e.target.checked; } }), h('span', { text: 'Apply to all remaining conflicts' })),
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', id: 'cf-replace', onclick: () => resolveConflict('replace') }, 'Replace'), h('button', { class: 'btn', id: 'cf-keep', onclick: () => resolveConflict('keep') }, 'Keep both'),
+        h('span', { class: 'note', text: `Keep both adds the import as “${keepBothName(k.x.name, k.isR ? S.recipes : S.presets, k.isR ? 60 : 40)}”.` })),
+      h('p', { class: 'note', style: 'margin:0', text: 'Closing this prompt cancels the whole import.' }))];
+}
+function renderModal() {
+  const m = ui.modal;
+  const close = () => { if (m.type === 'conflict') { ui.importPlan = null; toast('Import cancelled. Nothing was changed.'); } ui.modal = null; render(); };
+  const scrim = h('div', { class: 'scrim', onclick: e => { if (e.target === scrim) close(); } },
+    h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' }, m.type === 'add' ? renderAddMenu(m) : renderConflict(m)));
+  return scrim;
+}
+
+/* ===================== Bar mode (FR12) ===================== */
+function enterBar() {
+  stopPreview(); ui.modal = null; ui.bar = { phase: 'check', wakeOK: null };
+  requestWake().then(ok => { if (ui.bar) { ui.bar.wakeOK = ok; render(); } });
+  render(); window.scrollTo(0, 0);
+}
+function exitBar() { if (S.activeRun) { S.activeRun = null; save(true); } ui.bar = null; releaseWake(); document.body.classList.remove('cue-pre'); render(); }
+function runT() { const ar = S.activeRun; if (!ar) return 0; return ((ar.pausedAtMs || Date.now()) - ar.startedAtEpochMs) / 1000; }
+function startRun() {
+  ensureAudio(); requestWake().then(ok => { if (ui.bar) ui.bar.wakeOK = ok; });
+  const lead = S.deviceSettings.leadInS;
+  S.activeRun = { recipeId: rec().id, startedAtEpochMs: Date.now() + lead * 1000 };
+  save(true); ui.bar = { phase: 'run', prev: -lead - 0.01 }; render(); requestAnimationFrame(barFrame);
+}
+function togglePause() {
+  const ar = S.activeRun; if (!ar) return;
+  if (ar.pausedAtMs) { ar.startedAtEpochMs += Date.now() - ar.pausedAtMs; delete ar.pausedAtMs; ui.bar.prev = runT(); requestAnimationFrame(barFrame); }
+  else ar.pausedAtMs = Date.now();
+  save(true); render();
+}
+function stopTap() {
+  if (ui.bar.stopArm && Date.now() - ui.bar.stopArm < 3000) { exitBar(); toast('Run stopped.'); return; }
+  ui.bar.stopArm = Date.now(); render();
+  setTimeout(() => { if (ui.bar && ui.bar.stopArm && Date.now() - ui.bar.stopArm >= 3000) { ui.bar.stopArm = null; render(); } }, 3050);
+}
+function barFrame() {
+  if (!ui.bar || ui.bar.phase !== 'run' || !S.activeRun || S.activeRun.pausedAtMs) return;
+  const t = runT(), L = liveState(t, A);
+  if (t >= A.end) { ui.bar = { phase: 'end' }; S.activeRun = null; save(true); releaseWake(); document.body.classList.remove('cue-pre'); render(); return; }
+  if (t < 0) { for (const k of [3, 2, 1]) if (ui.bar.prev < -k && t >= -k) beep(k === 1 ? 990 : 880, 0.1); }
+  processCues(ui.bar.prev, t, L.events);
+  ui.bar.prev = t;
+  const host = document.getElementById('bar-live'); if (host) host.replaceChildren(barLive(t));
+  document.body.classList.toggle('cue-pre', t >= 0 ? L.cuePre : t >= -3);
+  requestAnimationFrame(barFrame);
+}
+function compactTimeline(t) {
+  const r = rec(), w0 = t - 5, span = 60, wrap = h('div', { class: 'compact', 'aria-label': 'Next 60 seconds' });
+  const T = tokens(), col = { pour: T.pour, op: T.op, wait: 'transparent', custom: 'transparent' };
+  A.starts.forEach((off, d) => {
+    const lane = h('div', { class: 'cl', style: `top:${d * 30}px` });
+    lane.append(h('span', { class: 'mono', style: 'position:absolute;left:4px;top:7px;font-size:10px;z-index:2', text: LETTERS[d] }));
+    for (const row of A.res.rows) {
+      const s = off + row.start, e = off + row.end; if (e < w0 || s > w0 + span) continue;
+      const left = (s - w0) / span * 100, width = (e - s) / span * 100, hands = row.handsOn;
+      lane.append(h('div', { class: 'cb', style: `left:${left}%;width:${width}%;background:${hands ? (row.step.category === 'op' ? col.op : col.pour) : 'transparent'};color:${hands ? '#fff' : 'inherit'};border:1px ${hands ? 'solid transparent' : 'dashed ' + T.line}`, text: row.step.name }));
+    }
+    wrap.append(lane);
+  });
+  wrap.append(h('div', { class: 'now', style: `left:${5 / span * 100}%` }));
+  return wrap;
+}
+function barLive(t) {
+  if (t < 0) {
+    const first = liveState(0, A).events[0];
+    return h('div', { style: 'display:grid;gap:12px;justify-items:center;padding-block:20px' }, h('span', { class: 'lbl', text: 'Lead-in · starting' }), h('div', { class: 'leadin', text: Math.ceil(-t) }),
+      first ? h('div', { class: 'big', text: `${LETTERS[first.d]} · ${actionText(first.row)}` }) : null);
+  }
+  const { el } = renderLivePanels(t, A);
+  return h('div', { style: 'display:grid;gap:12px' }, h('div', { class: 'row' }, h('div', { class: 'clock', text: fmt(t) }), h('span', { class: 'note', text: 'session clock · ends ' + fmt(A.end) })), el, compactTimeline(t));
+}
+function renderBar(r) {
+  const b = ui.bar, ds = S.deviceSettings, large = ds.largeText;
+  const largeToggle = h('label', { class: 'row', for: 'large-text' }, h('input', { type: 'checkbox', id: 'large-text', checked: large, onchange: e => { ds.largeText = e.target.checked; save(); render(); } }), h('span', { text: 'Large text' }));
+  const head = h('div', { class: 'row' }, h('div', { class: 'brand' }, h('b', { text: r.name }), h('span', { text: 'Bar mode · 1× only · no editing' })), h('span', { class: 'spacer' }), statusPill(A));
+  const root = h('div', { class: 'bar wrap' + (large ? ' large' : '') }, head);
+  if (b.phase === 'check') {
+    root.append(h('dl', { class: 'kv' },
+      h('dt', { text: 'Drippers' }), h('dd', { text: String(r.pipeline.drippers) }),
+      r.pipeline.drippers > 1 ? [h('dt', { text: 'Default gap' }), h('dd', { text: fmt(r.pipeline.defaultGapS) })] : null,
+      r.pipeline.drippers === 3 ? [h('dt', { text: 'C starts' }), h('dd', { text: fmt(A.starts[2]) + (r.pipeline.pinnedStartC != null ? ' (pinned)' : '') })] : null,
+      h('dt', { text: 'Session end' }), h('dd', { text: fmt(A.end) }),
+      h('dt', { text: 'Dose · water' }), h('dd', { text: `${r.doseG} g · ${A.totalWater} g · ${r.tempC} °C` })));
+    if (A.errors) root.append(h('div', { class: 'issues' }, A.all.filter(i => i.sev === 'error').map(i => h('div', { class: 'issue err' }, h('span', { class: 'pill err', text: 'Error' }), h('span', null, h('b', { text: i.title }), h('small', { text: i.detail }))))));
+    root.append(h('div', { class: 'row' }, h('label', { class: 'row', for: 'bar-sound' }, h('input', { type: 'checkbox', id: 'bar-sound', checked: ds.sound, onchange: e => { ds.sound = e.target.checked; save(); } }), h('span', { text: 'Sound' })),
+      h('button', { class: 'btn', id: 'test-beep', onclick: () => { ensureAudio(); beep(880, 0.12); beep(880, 0.1, 0.18); } }, 'Test beep'), largeToggle));
+    root.append(h('div', { class: 'row' }, h('span', { class: 'lbl', text: 'Lead-in' }), h('div', { class: 'seg' }, [0, 3, 5, 10].map(v => h('button', { 'aria-pressed': ds.leadInS === v, onclick: () => { ds.leadInS = v; save(); render(); } }, v ? v + ' s' : 'Off')))));
+    if (b.wakeOK === false) root.append(h('div', { class: 'notice' }, h('span', { text: 'The screen may lock during the run. Set Auto-Lock to Never while brewing.' })));
+    root.append(h('div', { class: 'row' }, h('button', { class: 'btn primary', id: 'start-run', onclick: startRun }, A.errors ? 'Start anyway' : 'Start'), h('button', { class: 'btn', id: 'back-design', onclick: exitBar }, 'Back to design')));
+  } else if (b.phase === 'resume') {
+    root.append(h('div', { class: 'notice' }, h('span', { text: 'A run was in progress when the page closed.' })));
+    root.append(h('div', { class: 'row' }, h('button', { class: 'btn primary', id: 'resume-run', onclick: () => { ensureAudio(); requestWake(); ui.bar = { phase: 'run', prev: runT() }; render(); requestAnimationFrame(barFrame); } }, 'Resume at ' + fmt(Math.max(0, runT()))),
+      h('button', { class: 'btn', onclick: exitBar }, 'Back to design')));
+  } else if (b.phase === 'run') {
+    const paused = !!(S.activeRun && S.activeRun.pausedAtMs);
+    root.append(h('div', { id: 'bar-live' }, barLive(runT())));
+    root.append(h('div', { class: 'row' },
+      h('button', { class: 'btn primary', id: 'pause', onclick: togglePause }, paused ? '▶ Resume' : '❚❚ Pause'),
+      h('button', { class: 'btn danger' + (b.stopArm ? ' armed' : ''), id: 'stop', onclick: stopTap }, b.stopArm ? 'Tap again to stop' : '■ Stop'),
+      largeToggle, paused ? h('span', { class: 'pill warn', text: 'Paused' }) : null));
+  } else if (b.phase === 'end') {
+    const fin = A.starts.map((off, d) => [d, off + A.res.length]);
+    root.append(h('h2', { text: 'Session finished' }), h('dl', { class: 'kv' }, fin.map(([d, f]) => [h('dt', { text: 'Dripper ' + LETTERS[d] }), h('dd', { text: 'finished at ' + fmt(f) })]),
+      h('dt', { text: 'Finish spread' }), h('dd', { text: fmt(fin[fin.length - 1][1] - fin[0][1]) + ' (how long the first cup waits)' })));
+    root.append(h('div', { class: 'row' }, h('button', { class: 'btn primary', id: 'back-design', onclick: exitBar }, 'Back to design')));
+  }
+  return root;
+}
+
+/* ===================== start-up ===================== */
+document.addEventListener('keydown', e => {
+  if (ui.bar) return;
+  const typing = e.target.closest && e.target.closest('input,textarea,select');
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (e.key === 'Escape' && ui.modal) { if (ui.modal.type === 'conflict') { ui.importPlan = null; toast('Import cancelled. Nothing was changed.'); } ui.modal = null; render(); }
+});
+let rsz = null; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(() => { if (!ui.drag) render(); }, 150); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => render());
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ui.bar && ui.bar.phase === 'run') { ui.bar.prev = runT(); requestWake(); } });
+(function boot() {
+  const ar = S.activeRun;
+  if (ar) {
+    const r = S.recipes.find(x => x.id === ar.recipeId);
+    if (r) { S.openRecipeId = r.id; const end = analyse(r).end; if (runT() < end) ui.bar = { phase: 'resume' }; else { S.activeRun = null; save(true); } }
+    else { S.activeRun = null; save(true); }
+  }
+  render();
+  if (!ui.bar) scrollToTime(0);
+})();
+</script>
+</body>
+</html>
